@@ -1,4 +1,4 @@
-from typing import List, Tuple
+from typing import Any, List, Tuple, overload
 from enum import Enum
 import numpy as np
 import numpy.typing as npt
@@ -40,7 +40,6 @@ class CtrlComponents:
     armModel: Z1Model
     dt: float
     """Read only; default: 0.002"""
-
 
 # This class is inherited from ArmModel, but ArmModel is not exposed in the python wrapper
 class Z1Model:
@@ -137,12 +136,247 @@ class Z1Model:
         TDes: npt.NDArray[np.float64],
         qPast: npt.NDArray[np.float64],
         dt: float,
-    ) -> npt.NDArray[np.float64]: 
+    ) -> npt.NDArray[np.float64]:
         """
-        Function: The function use quadprog++ to slove equation: qd = J.inverse() * twist, even if J has no inverse 
+        Function: The function use quadprog++ to slove equation: qd = J.inverse() * twist, even if J has no inverse
         Inputs: twist: spatial velocity [R_dot, p_dot]
                 qPast: current joint angles
                 dt : compute period
         Returns: qd_result: joint velocity that are corresponding to twist
+        """
+        ...
+
+class ArmInterface:
+    def __init__(self, hasGripper: bool) -> None: ...
+
+    q: npt.NDArray[np.float64]
+    qd: npt.NDArray[np.float64]
+    tau: npt.NDArray[np.float64]
+    gripperQ: float
+    gripperQd: float
+    gripperTau: float
+    lowstate: LowlevelState
+    _ctrlComp: CtrlComponents
+
+    def setFsmLowcmd(self) -> None:
+        """Set arm to low command mode"""
+        ...
+    def getCurrentState(self) -> ArmFSMState: ...
+    def loopOn(self): ...
+    def loopOff(self): ...
+    def setFsm(self, fsm: ArmFSMState) -> bool:
+        """
+        Function: Change z1_ctrl state to fsm, wait until change complete
+        Input:    ArmFSMState
+        Output:   Whether swtich to fsm correctly
+        Note:     eaxmple: Only State_Passive could switch to State_LowCmd
+        """
+        ...
+    def backToStart(self):
+        """
+        Move arm to home position
+        wait until arrival home position, and then switch to State_JointCtrl
+        """
+        ...
+    def labelRun(self, label: str):
+        """
+        Move arm to label position
+        wait until arrival label position, and then switch to State_JointCtrl
+        label
+        which should exist in z1_controller/config/saveArmStates.csv.
+        The number of characters in label cannot be greater than 10.(char name[10])
+        """
+        ...
+    def labelSave(self, label: str):
+        """
+        Function: Save current position as a label to saveArmStates.csv
+                  Switch to State_JointCtrl when done
+        Input:    label
+                  name to save, which shouldn't exist in z1_controller/config/saveArmStates.csv.
+                  The number of characters in label cannot be greater than 10.(char name[10])
+        Output:   None
+        """
+        ...
+    def teach(self, label: str):
+        """
+        Function: Save current position as a label to saveArmStates.csv
+                  Switch to State_JointCtrl when done
+        Input:    label
+                  name to save, which shouldn't exist in z1_controller/config/saveArmStates.csv.
+                  The number of characters in label cannot be greater than 10.(char name[10])
+        Output:   None
+        """
+        ...
+    def teachRepeat(self, label: str) -> None:
+        """
+        Function: Switch to State_Teach
+        Input:    label
+                  Teach trajectory will be saved as Traj_label.csv in directory z1_controller/config/
+                  The number of characters in label cannot be greater than 10.(char name[10])
+        Output:   None
+        """
+        ...
+    def calibration(self) -> None:
+        """
+        Function: Calibrate the motor, make current position as home position
+        Input:    None
+        Output:   None
+        """
+        ...
+    @overload
+    def MoveJ(self, posture: npt.NDArray[np.float64], maxSpeed: float):
+        """
+        Function: Move the robot in a joint path
+        Input:    posture: target position, (roll pitch yaw x y z), unit: meter
+                  maxSpeed: the maximum joint speed when robot is moving, unit: radian/s
+                  range:[0, pi]
+        Output:   None
+        """
+        ...
+    @overload
+    def MoveJ(
+        self, posture: npt.NDArray[np.float64], gripperPos: float, maxSpeed: float
+    ) -> bool:
+        """
+        Function: Move the robot in a joint path, and control the gripper at the same time
+        Input:    posture: target position, (roll pitch yaw x y z), unit: meter
+                  gripperPos: target angular
+                    unit: radian
+                    range:[-pi/2, 0]
+                  maxSpeed: the maximum joint speed when robot is moving
+                    unit: radian/s
+                    range:[0, pi]
+        Output:   whether posture has inverse kinematics
+        """
+        ...
+    @overload
+    def MoveL(self, posture: npt.NDArray[np.float64], maxSpeed: float) -> bool:
+        """
+        Function: Move the robot in a linear path
+        Input:    posture: target position, (roll pitch yaw x y z), unit: meter
+                  maxSpeed: the maximum joint speed when robot is moving, unit: m/s
+        Output:   whether posture has inverse kinematics
+        """
+        ...
+    @overload
+    def MoveL(
+        self, posture: npt.NDArray[np.float64], gripperPos: float, maxSpeed: float
+    ) -> bool:
+        """
+        Function: Move the robot in a linear path, and control the gripper at the same time
+        Input:    posture: target position, (roll pitch yaw x y z), unit: meter
+                  gripperPos: target angular, unit: radian
+                    range:[-pi/2, 0]
+                  maxSpeed: the maximum joint speed when robot is moving, unit: m/s
+        Output:   whether posture has inverse kinematics
+        """
+        ...
+    @overload
+    def MoveC(
+        self,
+        middlePosutre: npt.NDArray[np.float64],
+        endPosture: npt.NDArray[np.float64],
+        maxSpeed: float,
+    ) -> bool:
+        """
+        Function: Move the robot in a circular path
+        Input:    middle posture: determine the shape of the circular path
+                  endPosture: target position, (roll pitch yaw x y z), unit: meter
+                  maxSpeed: the maximum joint speed when robot is moving, unit: m/s
+        Output:   whether posture has inverse kinematics
+        """
+        ...
+    @overload
+    def MoveC(
+        self,
+        middlePosutre: npt.NDArray[np.float64],
+        endPosture: npt.NDArray[np.float64],
+        gripperPos: float,
+        maxSpeed: float,
+    ) -> bool:
+        """
+        Function: Move the robot in a circular path, and control the gripper at the same time
+        Input:    middle posture: determine the shape of the circular path
+                  endPosture: target position, (roll pitch yaw x y z), unit: meter
+                  gripperPos: target angular, unit: radian
+                    range:[-pi/2, 0]
+                  maxSpeed: the maximum joint speed when robot is moving, unit: m/s
+        Output:   whether posture has inverse kinematics
+        """
+        ...
+    def startTrack(self, fsm: "ArmFSMState") -> bool:
+        """
+        Function: Control robot with q&qd command in joint space or posture command in cartesian space
+        Input:    fsm: ArmFSMState::JOINTCTRL or ArmFSMState::CARTESIAN
+        Output:   whether posture has inverse kinematics
+        Description: Detailed description provided in the C++ header is included here.
+        """
+        ...
+    def sendRecv(self) -> None:
+        """
+        Function: send udp message to z1_ctrl and receive udp message from it
+        Input:    None
+        Output:   None
+        Description: Detailed description provided in the C++ header is included here.
+        """
+        ...
+    def setWait(self, Y_N: bool) -> None:
+        """
+        Function: whether to wait for the command to finish
+        Input:    true or false
+        Output:   None
+        Description: Detailed description provided in the C++ header is included here.
+        """
+        ...
+    def jointCtrlCmd(
+        self, directions: npt.NDArray[np.float64], jointSpeed: float
+    ) -> None:
+        """
+        Function: set q & qd command automatically by input parameters
+        Input:    directions: movement directions [include gripper], range:[-1,1]
+                   J1, J2, J3, J4, J5, J6, gripper
+                  jointSpeed: range: [0, pi]
+        Output:   None
+        Description: Detailed description provided in the C++ header is included here.
+        """
+        ...
+    def cartesianCtrlCmd(
+        self, directions: npt.NDArray[np.float64], oriSpeed: float, posSpeed: float
+    ) -> None:
+        """
+        Function: set spatial velocity command automatically by input parameters
+        Input:    directions: movement directions [include gripper], range:[-1,1]
+                   roll, pitch, yaw, x, y, z, gripper
+                  oriSpeed: range: [0, 0.6]
+                  posSpeed: range: [0, 0.3]
+                  gripper joint speed is set to 1.0
+        Output:   None
+        Description: Detailed description provided in the C++ header is included here.
+        """
+        ...
+    def setArmCmd(
+        self,
+        q: npt.NDArray[np.float64],
+        qd: npt.NDArray[np.float64],
+        tau: npt.NDArray[np.float64] = npt.NDArray[np.float64](),
+    ) -> None:
+        """
+        Function: Set six joints commands to class lowcmd
+        Input:    q:  joint angle
+                  qd: joint velocity
+                  tau: joint (Only used in State_LOWCMD)
+        Output:   None
+        """
+        ...
+    def setGripperCmd(
+        self, gripperPos: float, gripperSpeed: float, gripperTorque: float = 0.0
+    ) -> None:
+        """
+        Function: Set gripper command to class lowcmd
+        Input:    gripperPos: target angular
+                    range:[-pi/2, 0]
+                  gripperSpeed: target speed, range:[0, 1.0]
+                  gripperTorque: target torque, default:0, range:[0, 1.0]
+        Output:   None
         """
         ...
