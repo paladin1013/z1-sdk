@@ -137,6 +137,7 @@ PYBIND11_MODULE(unitree_arm_interface, m){
         .def_readwrite("gripperQd", &ArmInterface::gripperW)
         .def_readwrite("gripperTau", &ArmInterface::gripperTau)
         .def_readwrite("lowstate", &ArmInterface::lowstate)
+        .def_readwrite("lowcmd", &ArmInterface::lowcmd)
         .def_readwrite("_ctrlComp", &ArmInterface::_ctrlComp)
         .def("setFsmLowcmd", &ArmInterface::setFsmLowcmd)
         .def("getCurrentState", &ArmInterface::getCurrentState)

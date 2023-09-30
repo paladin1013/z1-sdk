@@ -31,15 +31,167 @@ class ArmFSMState(Enum):
     LOWCMD: ...
 
 class LowlevelState:
+    endPosture: npt.NDArray[np.float64]
+    q: List[float]
+    dq: List[float]
+    ddq: List[float]
+    tau: List[float]
+    temperature: List[int]
+    errorstate: List[int]
+    """
+    0x01 : phase current is too large
+    0x02 : phase leakage
+    0x04 : motor winding overheat or temperature is too large
+    0x20 : parameters jump
+    0x40 : Ignore
+    """
+    isMotorConnected: List[int]
+    """
+    0: OK
+    1: communication between lower computer and motor disconnect once
+    2: communication between lower computer and motor has CRC erro once
+    """
     def getQ(self) -> npt.NDArray[np.float64]: ...
     def getQd(self) -> npt.NDArray[np.float64]: ...
     def getQdd(self) -> npt.NDArray[np.float64]: ...
     def getQTau(self) -> npt.NDArray[np.float64]: ...
+    def getGripperQ(self) -> float: ...
+    def getGripperQd(self) -> float: ...
+    def getGripperTau(self) -> float: ...
+
+class LowlevelCmd:
+    """LowlevelCmd struct stub for UNITREE_ARM namespace."""
+
+    # Constructors
+    def __init__(self): ...
+    def __del__(self): ...
+
+    # Public members
+    twsit: npt.NDArray[np.float64]
+    q: List[float]
+    dq: List[float]
+    tau: List[float]
+    kp: List[float]
+    kd: List[float]
+    posture: npt.NDArray[np.float64]
+
+    # Methods
+    def setZeroDq(self) -> None:
+        """dq = {0}"""
+        ...
+
+    def setZeroTau(self) -> None:
+        """tau = {0}"""
+        ...
+
+    def setZeroKp(self) -> None:
+        """kp = {0}"""
+        ...
+
+    def setZeroKd(self) -> None:
+        """kd = {0}"""
+        ...
+
+    @overload
+    def setControlGain(self) -> None:
+        """
+        set default arm kp & kd (Only used in State_LOWCMD)
+        kp = [20, 30, 30, 20, 15, 10]
+        kd = [2000, 2000, 2000, 2000, 2000, 2000]
+        """
+        ...
+
+    @overload
+    def setControlGain(self, KP: List[float], KW: List[float]) -> None:
+        """kp = KP, kd = KW"""
+        ...
+
+    @overload
+    def setQ(self, qInput: List[float]) -> None:
+        """q = qInput"""
+        ...
+
+    @overload
+    def setQ(self, qInput: npt.NDArray[np.float64]) -> None:
+        """q = qInput"""
+        ...
+
+    def setQd(self, qDInput: npt.NDArray[np.float64]) -> None:
+        """dq = qDInput"""
+        ...
+
+    def setTau(self, tauInput: npt.NDArray[np.float64]) -> None:
+        """tau = tauInput"""
+        ...
+
+    def setPassive(self) -> None:
+        """
+        setZeroDq()
+        setZeroTau()
+        setZeroKp()
+        kd = [10, 10, 10, 10, 10, 10]
+        """
+        ...
+
+    @overload
+    def setGripperGain(self) -> None:
+        """
+        set default gripper kp & kd (Only used in State_LOWCMD)
+        kp.at(kp.size()-1) = 20
+        kd.at(kd.size()-1) = 2000
+        """
+        ...
+
+    @overload
+    def setGripperGain(self, KP: float, KW: float) -> None:
+        """
+        kp.at(kp.size()-1) = KP
+        kd.at(kd.size()-1) = KW
+        """
+        ...
+
+    def setGripperZeroGain(self) -> None:
+        """set gripper kp&kd to zero"""
+        ...
+
+    def setGripperQ(self, qInput: float) -> None:
+        """q.at(q.size()-1) = qInput;"""
+        ...
+
+    def getGripperQ(self) -> float:
+        """return q.at(q.size()-1);"""
+        ...
+
+    def setGripperQd(self, qdInput: float) -> None:
+        """dq.at(dq.size()-1) = qdInput;"""
+        ...
+
+    def getGripperQd(self) -> float:
+        """return dq.at(dq.size()-1);"""
+        ...
+
+    def setGripperTau(self, tauInput: float) -> None:
+        """tau.at(tau.size()-1) = tauInput;"""
+        ...
+
+    def getGripperTau(self) -> float:
+        """return tau.at(tau.size()-1);"""
+        ...
+
+    def getQ(self) -> npt.NDArray[np.float64]:
+        """return Vec6 from std::vector<double> q, without gripper"""
+        ...
+
+    def getQd(self) -> npt.NDArray[np.float64]:
+        """return Vec6 from std::vector<double> dq, without gripper"""
+        ...
 
 class CtrlComponents:
     armModel: Z1Model
     dt: float
     """Read only; default: 0.002"""
+    lowcmd: LowlevelCmd
+    lowstate: LowlevelState
 
 # This class is inherited from ArmModel, but ArmModel is not exposed in the python wrapper
 class Z1Model:
@@ -156,6 +308,9 @@ class ArmInterface:
     gripperQd: float
     gripperTau: float
     lowstate: LowlevelState
+    """same as _ctrlComp->lowstate"""
+    lowcmd: LowlevelCmd
+    """same as _ctrlComp->lowcmd"""
     _ctrlComp: CtrlComponents
 
     def setFsmLowcmd(self) -> None:
