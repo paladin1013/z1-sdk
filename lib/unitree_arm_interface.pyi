@@ -338,7 +338,7 @@ class ArmInterface:
         Move arm to label position
         wait until arrival label position, and then switch to State_JointCtrl
         label
-        which should exist in z1_controller/config/saveArmStates.csv.
+        which should exist in z1_controller/config/savedArmStates.csv.
         The number of characters in label cannot be greater than 10.(char name[10])
         """
         ...
