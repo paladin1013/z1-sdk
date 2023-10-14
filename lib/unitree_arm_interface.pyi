@@ -33,6 +33,7 @@ class ArmFSMState(Enum):
 class LowlevelState:
     endPosture: npt.NDArray[np.float64]
     q: List[float]
+    """7 elements, including gripper q as the last element"""
     dq: List[float]
     ddq: List[float]
     tau: List[float]

@@ -9,8 +9,8 @@ class HardwareAlarm:
         self,
         usb_port: str,
         baud_rate: int = 9600,
-        turn_on: str = b"\xA0\x01\x00\xA1",
-        turn_off: str = b"\xA0\x01\x01\xA2",
+        turn_on: bytes = b"\xA0\x01\x00\xA1",
+        turn_off: bytes = b"\xA0\x01\x01\xA2",
     ):
         self.serial = serial.Serial(usb_port, baud_rate)
         self.turn_off_str = turn_on
