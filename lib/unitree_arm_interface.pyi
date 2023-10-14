@@ -464,23 +464,55 @@ class ArmInterface:
         Function: Control robot with q&qd command in joint space or posture command in cartesian space
         Input:    fsm: ArmFSMState::JOINTCTRL or ArmFSMState::CARTESIAN
         Output:   whether posture has inverse kinematics
-        Description: Detailed description provided in the C++ header is included here.
+        Description: 
+                1. ArmFSMState::JOINTCTRL, 
+                if you run function startTrack(ArmFSMState::JOINTCTRL), 
+                firstly, the following parameters will be set at the first time:
+                    q : <---- lowstate->getQ()
+                    qd: <---- lowstate->getQd()
+                    gripperQ:  <----   lowstate->getGripperQ()
+                    gripperQd: <----  lowstate->getGripperQd()
+                then you can change these parameters to control robot
+                2. ArmFSMState::CARTESIAN, 
+                if you run function startTrack(ArmFSMState::CARTESIAN), 
+                firstly, the following parameters will be set at the first time:
+                    twist.setZero()
+                then you can change it to control robot, [Based on the object coordinate system]
         """
         ...
     def sendRecv(self) -> None:
         """
         Function: send udp message to z1_ctrl and receive udp message from it
         Input:    None
-        Output:   None
-        Description: Detailed description provided in the C++ header is included here.
+        Output:   None\n
+        Description: 
+            sendRecvThread will run sendRecv() at a frequency of 500Hz
+            ctrlcomp.sendRecv() is called in unitreeArm.sendRecv(),
+            and set command parameters in unitreeArm to lowcmd automatically
+            If you want to control robot under JOINTCTRL, CARTESIAN or LOWCMD,
+            instead of MovecJ, MoveL, MoveC, and so on
+            it is recommended to create your own thread to process command parameters
+            (see stratTrack() description)
+            and execute sendRecv() at the end of thread
         """
         ...
     def setWait(self, Y_N: bool) -> None:
         """
         Function: whether to wait for the command to finish
         Input:    true or false
-        Output:   None
-        Description: Detailed description provided in the C++ header is included here.
+        Output:   None\n
+        Description: 
+            For example, MoveJ will send a trajectory command to z1_controller and then
+            run usleep() to wait for the trajectory execution to complete.
+            If set [wait] to false, MoveJ  will send command only and user should judge 
+            for youself whether the command is complete.
+                Method 1: if(_ctrlComp->recvState.state != fsm)
+                    After trajectory complete, the FSM will switch to ArmFSMState::JOINTCTRL
+                    automatically
+                Method 2: if((lowState->endPosture - endPostureGoal).norm() < error)
+                    Check whether current posture reaches the target
+            Related functions:
+                MoveJ(), MoveL(), MoveC(), backToStart(), labelRun(), teachRepeat()
         """
         ...
     def jointCtrlCmd(
@@ -491,8 +523,14 @@ class ArmInterface:
         Input:    directions: movement directions [include gripper], range:[-1,1]
                    J1, J2, J3, J4, J5, J6, gripper
                   jointSpeed: range: [0, pi]
-        Output:   None
-        Description: Detailed description provided in the C++ header is included here.
+        Output:   None\n
+        Description: 
+            The function is typically used to control the robot by keyboard or joystick
+            When a key is pressed, the directions[i] sets to 1 or -1, and the function will 
+            automatically execute the following command:
+                    qd = directions * jointSpeed
+                    q += qd * _ctrlComp->dt
+            if directions == 0, the robot stop moving
         """
         ...
     def cartesianCtrlCmd(
@@ -505,8 +543,19 @@ class ArmInterface:
                   oriSpeed: range: [0, 0.6]
                   posSpeed: range: [0, 0.3]
                   gripper joint speed is set to 1.0
-        Output:   None
-        Description: Detailed description provided in the C++ header is included here.
+        Output:   None\n
+        Description: 
+            The function is typically used to control the robot by keyboard or joystick
+            When a key is pressed, the directions[i] is set to 1 or -1, and the function will 
+            automatically execute the following command:
+                    postureDelta = directions * speed
+                    postureGoal  = postureDelta + posturePast
+                    Tgoal = postureToHomo(postureGoal)
+                    Tpast = postureToHomo(posturePast)
+                    omega  = so3ToVec(MatrixLog3( Tpast.Rot.Transpose * Tgoal.Rot ))
+                    v      = Tdelta.t
+                    twist  = (omega, v)
+            if directions == 0, the robot stop moving
         """
         ...
     def setArmCmd(
