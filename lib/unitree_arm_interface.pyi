@@ -60,7 +60,6 @@ class LowlevelState:
     def getGripperTau(self) -> float: ...
 
 class LowlevelCmd:
-    """LowlevelCmd struct stub for UNITREE_ARM namespace."""
 
     # Constructors
     def __init__(self): ...

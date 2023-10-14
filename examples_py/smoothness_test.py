@@ -1,58 +1,49 @@
-import sys
-import unitree_arm_interface
-import time
 import numpy as np
+import unitree_arm_interface as sdk
+import time
+import numpy.typing as npt
 
-print("Press ctrl+\ to quit process.")
+def moveToJointQ(arm: sdk.ArmInterface, targetQ: npt.NDArray[np.float64], expected_time: float):
 
-np.set_printoptions(precision=3, suppress=True)
-arm =  unitree_arm_interface.ArmInterface(hasGripper=True)
-armState = unitree_arm_interface.ArmFSMState
-arm.loopOn()
-
-arm.startTrack(armState.JOINTCTRL)
-
-def moveSingleJoint(arm: unitree_arm_interface.ArmInterface, joint_id: int, dq: float, duration: float, rest_time: float=0.2):
-    """Please refer to https://dev-z1.unitree.com/brief/parameter.html for the joint number and their range. 
-    7 indicates the gripper."""
-    assert joint_id in range(1, 8), "Joint id should be integers between 1 and 7, Please refer to https://dev-z1.unitree.com/brief/parameter.html for the joint id"
+    currentQ = np.append(arm.q, arm.gripperQ)
     dt = arm._ctrlComp.dt
-    speed = np.array([0,0,0,0,0,0,0], dtype=np.float64)
-    speed[joint_id-1] = dq
-    for i in range(0, int(duration/dt)):
+    speed = (targetQ-currentQ)/expected_time
+
+    for i in range(0, int(expected_time/dt)):
         arm.jointCtrlCmd(speed, 1)
         time.sleep(dt)
-    time.sleep(rest_time)
+
+    currentQ = np.append(arm.q, arm.gripperQ)
+    print(f"Error: {currentQ-targetQ}")
 
 
-duration = 0.5 # (s)
-# To keep safe, please make sure speed*duration = 0.5 
-speed = 0.5/duration
+np.set_printoptions(precision=3, suppress=True)
+arm =  sdk.ArmInterface(hasGripper=True)
+armState = sdk.ArmFSMState
+arm.loopOn()
+arm.setFsmLowcmd()
 
-moveSingleJoint(arm=arm, joint_id=1, dq=speed, duration=duration)
-moveSingleJoint(arm=arm, joint_id=1, dq=-speed, duration=duration)
-
-moveSingleJoint(arm=arm, joint_id=3, dq=-speed, duration=2.5*duration)
-moveSingleJoint(arm=arm, joint_id=2, dq=speed, duration=2.5*duration)
-
-moveSingleJoint(arm=arm, joint_id=4, dq=speed, duration=duration)
-moveSingleJoint(arm=arm, joint_id=4, dq=-speed, duration=2*duration)
-moveSingleJoint(arm=arm, joint_id=4, dq=speed, duration=duration)
-
-moveSingleJoint(arm=arm, joint_id=5, dq=speed, duration=duration)
-moveSingleJoint(arm=arm, joint_id=5, dq=-speed, duration=2*duration)
-moveSingleJoint(arm=arm, joint_id=5, dq=speed, duration=duration)
-
-moveSingleJoint(arm=arm, joint_id=6, dq=speed, duration=duration)
-moveSingleJoint(arm=arm, joint_id=6, dq=-speed, duration=2*duration)
-moveSingleJoint(arm=arm, joint_id=6, dq=speed, duration=duration)
-
-moveSingleJoint(arm=arm, joint_id=7, dq=-speed, duration=duration)
-moveSingleJoint(arm=arm, joint_id=7, dq=speed, duration=duration)
-
-moveSingleJoint(arm=arm, joint_id=2, dq=-speed, duration=2.5*duration)
-moveSingleJoint(arm=arm, joint_id=3, dq=speed, duration=2*duration)
-
-arm.backToStart()
+kp = arm._ctrlComp.lowcmd.kp
+kp[1] /= 3 # Decrease the stiffness of joint 2
+print(f"Decrease kp of joint 2 from {arm._ctrlComp.lowcmd.kp[1]} to {kp[1]}")
+kd = arm._ctrlComp.lowcmd.kd
 arm.loopOff()
 
+arm.loopOn()
+arm.setFsmLowcmd()
+kp = arm._ctrlComp.lowcmd.kp
+print(f"Kp of joint 2 is set to {kp[1]}")
+arm.loopOff()
+
+
+arm.loopOn()
+arm._ctrlComp.lowcmd.setControlGain(kp, kd)
+arm.sendRecv()
+
+arm.backToStart()
+arm.startTrack(armState.JOINTCTRL)
+
+moveToJointQ(arm, np.array([0.0, 0, -1.0, -0.54, 0.0, 0.0, 0.0]), expected_time=2)
+moveToJointQ(arm, np.array([0.0, 1.5, -1.0, -0.54, 0.0, 0.0, 0.0]), expected_time=10)
+
+arm.backToStart()
