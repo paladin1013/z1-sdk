@@ -562,7 +562,7 @@ class ArmInterface:
         self,
         q: npt.NDArray[np.float64],
         qd: npt.NDArray[np.float64],
-        tau: npt.NDArray[np.float64] = np.zeros(0, dtype=np.float64),
+        tau: npt.NDArray[np.float64],
     ) -> None:
         """
         Function: Set six joints commands to class lowcmd

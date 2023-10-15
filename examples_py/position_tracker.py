@@ -9,30 +9,18 @@ np.set_printoptions(precision=3, suppress=True)
 arm =  sdk.ArmInterface(hasGripper=True)
 
 arm.loopOn()
-arm.startTrack(sdk.ArmFSMState.JOINTCTRL)
-
-steps = 10000
-
-
-for i in range(steps):
-    arm.setArmCmd(
-        np.zeros(6, dtype=np.float64), 
-        np.zeros(6, dtype=np.float64), 
-        np.zeros(6, dtype=np.float64)
-    )
-    arm.setGripperCmd(0, 0, 0)
-    arm.sendRecv()
-    time.sleep(arm._ctrlComp.dt)
-    if i % 50 == 0:
-        print(", ".join(f"{q:.03f}" for q in arm.lowstate.q))
-
-
 arm.setFsm(sdk.ArmFSMState.PASSIVE)
-arm.calibration()
 
-arm.backToStart()
-arm.setFsm(sdk.ArmFSMState.PASSIVE)
+prev_q = arm.lowstate.q
 while True:
-    print(", ".join(f"{q:.03f}" for q in arm.lowstate.q+arm.q.tolist()))
-    time.sleep(0.1)
+    t = time.time()
+    while True:
+        new_q = arm.lowstate.q
+        if prev_q != new_q:
+            break
+        time.sleep(0.0001)
+    update_time = time.time()-t
+    prev_q = new_q
+    print(f"Update time: {update_time:.4f} "+", ".join(f"{q:+.03f}({dq:+.03f})" for (q, dq) in zip(arm.lowstate.q,arm.lowstate.dq)))
+    
 arm.loopOff()

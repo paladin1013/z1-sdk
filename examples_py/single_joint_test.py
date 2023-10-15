@@ -9,7 +9,7 @@ np.set_printoptions(precision=3, suppress=True)
 arm =  unitree_arm_interface.ArmInterface(hasGripper=True)
 armState = unitree_arm_interface.ArmFSMState
 arm.loopOn()
-
+arm.backToStart()
 arm.startTrack(armState.JOINTCTRL)
 
 def moveSingleJoint(arm: unitree_arm_interface.ArmInterface, joint_id: int, dq: float, duration: float, rest_time: float=0.2):
@@ -25,7 +25,7 @@ def moveSingleJoint(arm: unitree_arm_interface.ArmInterface, joint_id: int, dq: 
     time.sleep(rest_time)
 
 # Duration of each movement. Speed will be adjust accordingly (the angle distance should be kept the same)
-duration = 10 # (s)
+duration = 3 # (s)
 # To keep safe, please make sure speed*duration = 0.5 
 speed = 0.5/duration
 
