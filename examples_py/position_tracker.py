@@ -2,10 +2,12 @@ import numpy as np
 import unitree_arm_interface as sdk
 import time
 import numpy.typing as npt
-import matplotlib.pyplot as plt
 import json
 from typing import List, Dict
 from dataclasses import dataclass
+from spacemouse.spacemouse_shared_memory import Spacemouse
+from multiprocessing.managers import SharedMemoryManager
+
 
 @dataclass
 class Frame:
@@ -44,25 +46,45 @@ def track_passive_movement(arm: sdk.ArmInterface, duration: float, freq: float) 
     
     
 
+def teleop_test():
+
+    arm = sdk.ArmInterface(hasGripper=True)
+
+    arm.loopOn()
+    arm.backToStart()
+    arm.startTrack(sdk.ArmFSMState.CARTESIAN)
+    dt = arm._ctrlComp.dt
+    freq = 100 # Hz
+    with SharedMemoryManager() as shm_manager:
+        with Spacemouse(shm_manager=shm_manager, deadzone=0.3, max_value=500) as sm:
+            try:
+                while True:
+                    state = sm.get_motion_state_transformed()
+                    
+                    # Spacemouse state is in the format of (x y z roll pitch yaw)
+                    directions = np.zeros(7, dtype=np.float64)
+                    directions[:3] = state[3:]
+                    directions[3:6] = state[:3]
+                    button_left = sm.is_button_pressed(0)
+                    button_right = sm.is_button_pressed(1)
+                    if button_left and not button_right:
+                        directions[6] = 1
+                    elif button_right and not button_left:
+                        directions[6] = -1
+                    else:
+                        directions[6] = 0
+                    # Unitree arm direction is in the format of (roll pitch yaw x y z gripper)
+                    # print(state)
+
+                    for k in range(int(1/freq/dt)):
+                        arm.cartesianCtrlCmd(directions, 0.3, 0.3)
+                        time.sleep(dt)
+
+            except KeyboardInterrupt:
+                print("Finished! Arm will go back to the start position.")
+    arm.backToStart()
+    arm.loopOff()
 
 
-arm = sdk.ArmInterface(hasGripper=True)
-
-arm.loopOn()
-arm.setFsm(sdk.ArmFSMState.PASSIVE)
-
-prev_q = arm.lowstate.q
-
-while True:
-    t = time.time()
-    while True:
-        new_q = arm.lowstate.q
-        if prev_q != new_q:
-            break
-        time.sleep(0.0001)
-    update_time = time.time()-t
-    prev_q = new_q
-    print(f"Update time: {update_time:.4f} "+", ".join(f"{q:+.03f}({dq:+.03f})" for (q, dq) in zip(arm.lowstate.q,arm.lowstate.dq)))
-    
-arm.loopOff()
-
+if __name__ == "__main__":
+    teleop_test()
