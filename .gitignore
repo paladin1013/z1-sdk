@@ -1,3 +1,4 @@
 .vscode
 build
 lib/*.cpython*
+__pycache__
