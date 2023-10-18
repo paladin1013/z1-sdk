@@ -2,3 +2,4 @@
 build
 lib/*.cpython*
 __pycache__
+logs
