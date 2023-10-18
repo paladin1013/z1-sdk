@@ -21,8 +21,8 @@ class Frame:
     """6 elements, from joint 1 to joint 6, unit: N*m"""
     ee_posture: List[float] = field(default_factory=lambda: [0 for k in range(6)])
     """6 elements, end effector posture, [row, pitch, yaw, x, y, z], unit: meter or rad"""
-    gripper_q: float = 0
-    """Range from [0, 1]"""
+    gripper_q: List[float] = field(default_factory=lambda: [0 for k in range(1)])
+    """1 element (make it a list so that it is compatible with other attributes). Range from [0, 1]"""
 
 class Trajectory:
     def __init__(self, frames: Optional[List[Frame]]=None, file_name:Optional[str]=None):
@@ -44,7 +44,7 @@ class Trajectory:
     def is_initialized(self, attr_name):
         assert attr_name in ["joint_q", "joint_dq", "joint_tau", "ee_posture", "gripper_q"]
 
-        return any([any(frame.joint_q) for frame in self.frames])
+        return any([any(getattr(frame, attr_name)) for frame in self.frames])
 
     def interp_traj(self, new_timestamps: List[float]):
         """This method will interpolate a new trajectory, using the postures and the joint states from 
@@ -59,7 +59,7 @@ class Trajectory:
             dim = len(y[0])
             for k in range(dim):
                 y_k = [_[k] for _ in y]
-                f_k = interp1d(x, y_k)
+                f_k = interp1d(x, y_k, bounds_error=False, fill_value="extrapolate")
                 raw_results.append(f_k(x_new))
 
             results = [[raw_results[i][j] for i in range(dim)] for j in range(len(x_new))]
@@ -67,18 +67,44 @@ class Trajectory:
         
         new_traj = Trajectory([Frame(timestamp) for timestamp in new_timestamps])
 
-        # Interpolate all properties
+        # Interpolate all attributes
         for attr_name in ["joint_q", "joint_dq", "joint_tau", "ee_posture", "gripper_q"]:
+
             ref_val = [getattr(frame, attr_name) for frame in self.frames]
+
             interp_val = interpnd(ref_timestamps, ref_val, new_timestamps)
-            for k, frame in enumerate(self.frames):
+            for k in range(len(new_timestamps)):
                 setattr(new_traj.frames[k], attr_name, interp_val[k])
 
         return new_traj
     
+    def calc_difference(self, new_traj: "Trajectory", attr_name: str, specify_axis: Optional[int]=None):
+        """
+        Calculate the difference of `attr_name` between two trajectories. 
+
+        `attr_name` should be one of "joint_q", "joint_dq", "joint_tau", "ee_posture", "gripper_q".
+        If `specify_axis` is not set, this method will take the norm of the difference of all axes.
+        Otherwise it will only return the specified single axis (`new_traj - self`).
+
+        When applying this method, please make sure new_traj has the same timestamps as the current one.
+        If not, please first use interp_traj to get a interpolated trajectory.
+        """
+        assert attr_name in ["joint_q", "joint_dq", "joint_tau", "ee_posture", "gripper_q"]
         
+        if specify_axis is not None:
+            assert type(specify_axis) == int, f"`specify_axis` should be an integer from 0 to {len(getattr(self.frames[0], attr_name))}"
+            results:List[float] = [
+                    getattr(new_traj.frames[k], attr_name)[specify_axis] - getattr(frame, attr_name)[specify_axis]
+                    for k, frame in enumerate(self.frames)
+                    ]
+        else:
+            results:List[float] = []
+            for k, frame in enumerate(self.frames):
+                new_val = np.array(getattr(new_traj.frames[k], attr_name))
+                self_val = np.array(getattr(frame, attr_name))
+                results.append(float(np.linalg.norm(new_val - self_val)))
 
-
+        return results
 class PoseTracker:
     def __init__(self, arm: sdk.ArmInterface, teleop_dt: float, track_dt: float):
 
@@ -108,7 +134,7 @@ class PoseTracker:
             joint_dq=self.arm.lowstate.dq[:6],
             joint_tau=self.arm.lowstate.tau[:6],
             ee_posture=self.arm.lowstate.endPosture.tolist(),
-            gripper_q=self.arm.lowstate.q[6],
+            gripper_q=[self.arm.lowstate.q[6]],
         )
         self.tracked_traj.frames.append(new_frame)
 
@@ -205,7 +231,7 @@ class PoseTracker:
 
 
 
-    def replay_trajectory(
+    def replay_traj(
         self,
         trajectory: Trajectory,
         ctrl_method: sdk.ArmFSMState,
@@ -298,19 +324,25 @@ if __name__ == "__main__":
     duration = 10
     track_dt = 0.002
 
-    ref_file_name = f"logs/trajectories/teleop_duration{duration}_dt{track_dt}.json"
+    teleop_file_name = f"logs/trajectories/teleop_duration{duration}_dt{track_dt}.json"
     replay_file_name = f"logs/trajectories/replay_duration{duration}_dt{track_dt}.json"
-    pt = PoseTracker(arm, teleop_dt=0.02, track_dt=track_dt)
+    # pt = PoseTracker(arm, teleop_dt=0.02, track_dt=track_dt)
     # pt.start_teleop_tracking(duration)
-    # pt.save_frames()
+    # pt.tracked_traj.save_frames(teleop_file_name)
 
-    ref_traj = Trajectory(file_name=ref_file_name)
+    ref_traj = Trajectory(file_name=teleop_file_name)
     replay_traj = Trajectory(file_name=replay_file_name)
+    replay_timestamps = [frame.timestamp for frame in replay_traj.frames]
     
-    interp_traj = ref_traj.interp_traj([frame.timestamp for frame in replay_traj.frames])
+    interp_traj = ref_traj.interp_traj(replay_timestamps)
 
-    # pt.replay_trajectory(trajectory, sdk.ArmFSMState.JOINTCTRL)
-    # pt.save_frames(file_name.replace("teleop", "replay"))
+    diff = interp_traj.calc_difference(replay_traj, "joint_q")
+
+    plt.plot(replay_timestamps, diff)
+    plt.show()
+
+    # pt.replay_traj(trajectory, sdk.ArmFSMState.JOINTCTRL)
+    # pt.tracked_traj.save_frames(replay_file_name)
 
     
 
