@@ -126,6 +126,7 @@ class PoseTracker:
         self.tracked_traj = Trajectory()
         self.start_time = time.monotonic()
 
+
     def track_frame(self):
 
         new_frame = Frame(
@@ -141,10 +142,14 @@ class PoseTracker:
     def start_teleop_tracking(self, duration: float, back_to_start=True):
 
         self.arm.loopOn()
+        self.arm.setFsm(sdk.ArmFSMState.PASSIVE)
         if back_to_start:
             self.arm.backToStart()
-
-        self.arm.startTrack(sdk.ArmFSMState.CARTESIAN)
+            self.arm.setArmCmd(
+                np.zeros(6, dtype=np.float64),
+                np.zeros(6, dtype=np.float64),
+                np.zeros(6, dtype=np.float64),
+            )
 
         with SharedMemoryManager() as shm_manager:
             with Spacemouse(shm_manager=shm_manager, deadzone=0.3, max_value=500) as sm:
@@ -188,6 +193,7 @@ class PoseTracker:
                         for j in range(int(self.track_dt / self.arm_ctrl_dt)):
                             oriSpeed = 0.6
                             posSpeed = 0.3
+                            assert all(directions <= 1)
                             self.arm.cartesianCtrlCmd(directions, oriSpeed, posSpeed)
 
                             # Sleep `remaining_time` to match with reference time
@@ -203,6 +209,11 @@ class PoseTracker:
 
         if back_to_start:
             self.arm.backToStart()
+            self.arm.setArmCmd(
+                np.zeros(6, dtype=np.float64),
+                np.zeros(6, dtype=np.float64),
+                np.zeros(6, dtype=np.float64),
+            )
 
         self.arm.loopOff()
 
@@ -252,6 +263,11 @@ class PoseTracker:
             assert trajectory.is_initialized("joint_q"), "frame.joint_q in trajectory is not initialized"
 
             self.arm.backToStart()
+            self.arm.setArmCmd(
+                    np.zeros(6, dtype=np.float64),
+                    np.zeros(6, dtype=np.float64),
+                    np.zeros(6, dtype=np.float64),
+                )
             self.arm.startTrack(sdk.ArmFSMState.JOINTCTRL)
             init_start_time = time.monotonic()
 
@@ -291,6 +307,11 @@ class PoseTracker:
                     print(f"Finish replaying trajectory!")
                     if back_to_start:
                         self.arm.backToStart()
+                        self.arm.setArmCmd(
+                            np.zeros(6, dtype=np.float64),
+                            np.zeros(6, dtype=np.float64),
+                            np.zeros(6, dtype=np.float64),
+                        )
                     self.arm.loopOff()
                     return True
 
@@ -322,22 +343,23 @@ if __name__ == "__main__":
     arm = sdk.ArmInterface(hasGripper=True)
 
     duration = 10
-    track_dt = 0.002
+    track_dt = 0.01
 
     teleop_file_name = f"logs/trajectories/teleop_duration{duration}_dt{track_dt}.json"
     replay_file_name = f"logs/trajectories/replay_duration{duration}_dt{track_dt}.json"
-    # pt = PoseTracker(arm, teleop_dt=0.02, track_dt=track_dt)
-    # pt.start_teleop_tracking(duration)
-    # pt.tracked_traj.save_frames(teleop_file_name)
+    pt = PoseTracker(arm, teleop_dt=0.02, track_dt=track_dt)
+    pt.start_teleop_tracking(duration)
+    pt.tracked_traj.save_frames(teleop_file_name)
 
     ref_traj = Trajectory(file_name=teleop_file_name)
+    pt.replay_traj(ref_traj, ctrl_method=sdk.ArmFSMState.JOINTCTRL)
+    pt.tracked_traj.save_frames(replay_file_name)
+
     replay_traj = Trajectory(file_name=replay_file_name)
     replay_timestamps = [frame.timestamp for frame in replay_traj.frames]
     
     interp_traj = ref_traj.interp_traj(replay_timestamps)
-
     diff = interp_traj.calc_difference(replay_traj, "joint_q")
-
     plt.plot(replay_timestamps, diff)
     plt.show()
 
