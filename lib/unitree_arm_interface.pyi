@@ -249,7 +249,7 @@ class Z1Model:
                 q_result: Joint angles that achieve T within the specified tolerances,
         """
         ...
-    def forwardKinematics(self, q: npt.NDArray[np.float64], index: int = 6):
+    def forwardKinematics(self, q: npt.NDArray[np.float64], index: int = 6) -> npt.NDArray[np.float64]:
         """
         Function: compute end effector frame (used for current spatial position calculation)
         Inputs: q: current joint angles
