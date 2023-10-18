@@ -69,11 +69,17 @@ class LowlevelCmd:
     # Public members
     twsit: npt.NDArray[np.float64]
     q: List[float]
+    """7 elements"""
     dq: List[float]
+    """7 elements"""
     tau: List[float]
+    """7 elements"""
     kp: List[float]
+    """7 elements"""
     kd: List[float]
+    """7 elements"""
     posture: npt.NDArray[np.float64]
+    """6 elements, (row, pitch, yaw, x, y, z)"""
 
     # Methods
     def setZeroDq(self) -> None:
@@ -570,6 +576,8 @@ class ArmInterface:
                   qd: joint velocity
                   tau: joint (Only used in State_LOWCMD)
         Output:   None
+        Description:
+            This method is equal to setting values to the first 6 elements of arm.lowcmd.q, arm.lowcmd.dq and arm.lowcmd.tau
         """
         ...
     def setGripperCmd(
@@ -582,5 +590,7 @@ class ArmInterface:
                   gripperSpeed: target speed, range:[0, 1.0]
                   gripperTorque: target torque, default:0, range:[0, 1.0]
         Output:   None
+        Description:
+            This method is equal to setting values to arm.lowcmd.q[6], arm.lowcmd.dq[6] and arm.lowcmd.tau[6]
         """
         ...
