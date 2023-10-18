@@ -3,16 +3,16 @@ import unitree_arm_interface as sdk
 import time
 import numpy.typing as npt
 import json
-from typing import List, Dict
+from typing import List, Dict, Optional
 from dataclasses import dataclass, asdict, field
 from spacemouse.spacemouse_shared_memory import Spacemouse
 from multiprocessing.managers import SharedMemoryManager
-
-
+from scipy.interpolate import interp1d
+import matplotlib.pyplot as plt 
 @dataclass
 class Frame:
 
-    time_tag: float
+    timestamp: float
     joint_q: List[float] = field(default_factory=lambda: [0 for k in range(6)])
     """6 elements, from joint 1 to joint 6, unit: rad"""
     joint_dq: List[float] = field(default_factory=lambda: [0 for k in range(6)])
@@ -24,6 +24,60 @@ class Frame:
     gripper_q: float = 0
     """Range from [0, 1]"""
 
+class Trajectory:
+    def __init__(self, frames: Optional[List[Frame]]=None, file_name:Optional[str]=None):
+        if frames is None:
+            if file_name is None:
+                self.frames:List[Frame] = []
+            else:
+                with open(file_name, "r") as f:
+                    json_data = json.load(f)
+                    self.frames = [Frame(**frame) for frame in json_data]
+        else:
+            self.frames = frames
+    
+
+    def save_frames(self, file_name: str):
+        with open(file_name, "w") as f:
+            json.dump([asdict(frame) for frame in self.frames], f)
+
+    def is_initialized(self, attr_name):
+        assert attr_name in ["joint_q", "joint_dq", "joint_tau", "ee_posture", "gripper_q"]
+
+        return any([any(frame.joint_q) for frame in self.frames])
+
+    def interp_traj(self, new_timestamps: List[float]):
+        """This method will interpolate a new trajectory, using the postures and the joint states from 
+        the reference trajectory, and query at the input timestamps."""
+        
+        ref_timestamps = [frame.timestamp for frame in self.frames]
+    
+
+        def interpnd(x:List[float], y:List[List[float]], x_new:List[float]) -> List[List[float]]:
+            assert all([len(_)==len(y[0]) for _ in y]), "The input data of y should have the same dimension."
+            raw_results:List[List[float]] = []
+            dim = len(y[0])
+            for k in range(dim):
+                y_k = [_[k] for _ in y]
+                f_k = interp1d(x, y_k)
+                raw_results.append(f_k(x_new))
+
+            results = [[raw_results[i][j] for i in range(dim)] for j in range(len(x_new))]
+            return results
+        
+        new_traj = Trajectory([Frame(timestamp) for timestamp in new_timestamps])
+
+        # Interpolate all properties
+        for attr_name in ["joint_q", "joint_dq", "joint_tau", "ee_posture", "gripper_q"]:
+            ref_val = [getattr(frame, attr_name) for frame in self.frames]
+            interp_val = interpnd(ref_timestamps, ref_val, new_timestamps)
+            for k, frame in enumerate(self.frames):
+                setattr(new_traj.frames[k], attr_name, interp_val[k])
+
+        return new_traj
+    
+        
+
 
 class PoseTracker:
     def __init__(self, arm: sdk.ArmInterface, teleop_dt: float, track_dt: float):
@@ -31,7 +85,7 @@ class PoseTracker:
         self.arm = arm
         self.teleop_dt = teleop_dt
         self.track_dt = track_dt
-        self.tracked_frames: List[Frame] = []
+        self.tracked_traj: Trajectory = Trajectory()
         self.start_time = time.monotonic()
         self.arm_ctrl_dt = arm._ctrlComp.dt
         assert (
@@ -43,20 +97,20 @@ class PoseTracker:
 
     def reset(self):
 
-        self.tracked_frames = []
+        self.tracked_traj = Trajectory()
         self.start_time = time.monotonic()
 
     def track_frame(self):
 
         new_frame = Frame(
-            time_tag=time.monotonic() - self.start_time,
+            timestamp=time.monotonic() - self.start_time,
             joint_q=self.arm.lowstate.q[:6],
             joint_dq=self.arm.lowstate.dq[:6],
             joint_tau=self.arm.lowstate.tau[:6],
             ee_posture=self.arm.lowstate.endPosture.tolist(),
             gripper_q=self.arm.lowstate.q[6],
         )
-        self.tracked_frames.append(new_frame)
+        self.tracked_traj.frames.append(new_frame)
 
     def start_teleop_tracking(self, duration: float, back_to_start=True):
 
@@ -80,7 +134,7 @@ class PoseTracker:
                         print(f"Start tracking! Duration: {duration}s")
                         break
 
-                self.reset()  # will reset self.tracked_frames and self.start_time
+                self.reset()  # will reset self.tracked_traj and self.start_time
 
                 while time.monotonic() - self.start_time <= duration:
                     print(
@@ -149,23 +203,11 @@ class PoseTracker:
 
         self.arm.loopOff()
 
-    def save_frames(self, file_name: str):
 
-        with open(file_name, "w") as f:
-            json.dump([asdict(frame) for frame in self.tracked_frames], f)
-
-    def load_frames(self, file_name: str, override_tracked_frames=False) -> List[Frame]:
-
-        with open(file_name, "r") as f:
-            json_data = json.load(f)
-        frames = [Frame(**frame) for frame in json_data]
-        if override_tracked_frames:
-            self.tracked_frames = frames
-        return frames
 
     def replay_trajectory(
         self,
-        trajectory: List[Frame],
+        trajectory: Trajectory,
         ctrl_method: sdk.ArmFSMState,
         init_timeout: float = 5,
         back_to_start=True,
@@ -181,9 +223,7 @@ class PoseTracker:
         self.arm.loopOn()
 
         if ctrl_method == sdk.ArmFSMState.JOINTCTRL:
-            assert any(
-                [any(frame.joint_q) for frame in trajectory]
-            ), "frame.joint_q in trajectory is not initialized"
+            assert trajectory.is_initialized("joint_q"), "frame.joint_q in trajectory is not initialized"
 
             self.arm.backToStart()
             self.arm.startTrack(sdk.ArmFSMState.JOINTCTRL)
@@ -191,14 +231,14 @@ class PoseTracker:
 
             while True:
                 self.arm.setArmCmd(
-                    np.array(trajectory[0].joint_q),
-                    np.array(trajectory[0].joint_dq),
+                    np.array(trajectory.frames[0].joint_q),
+                    np.array(trajectory.frames[0].joint_dq),
                     np.zeros(6, dtype=np.float64),
                 )
                 time.sleep(self.arm_ctrl_dt)
                 if (
                     np.linalg.norm(
-                        np.array(trajectory[0].ee_posture)
+                        np.array(trajectory.frames[0].ee_posture)
                         - np.array(self.arm.lowstate.endPosture)
                     )
                     < 0.05
@@ -215,10 +255,10 @@ class PoseTracker:
             frame_num = 0
             while True:
                 elapsed_time = time.monotonic() - self.start_time
-                print(f"Elapsed time: {elapsed_time:3.f}s", end="\r")
+                print(f"Elapsed time: {elapsed_time:.3f}s", end="\r")
                 # Find the frame right after elapsed time
-                for k in range(frame_num, len(trajectory)):
-                    if trajectory[k].time_tag > elapsed_time:
+                for k in range(frame_num, len(trajectory.frames)):
+                    if trajectory.frames[k].timestamp > elapsed_time:
                         frame_num = k
                         break
                 else:
@@ -229,11 +269,11 @@ class PoseTracker:
                     return True
 
                 self.arm.setArmCmd(
-                    np.array(trajectory[frame_num].joint_q),
-                    np.array(trajectory[frame_num].joint_dq),
+                    np.array(trajectory.frames[frame_num].joint_q),
+                    np.array(trajectory.frames[frame_num].joint_dq),
                     np.zeros(6, dtype=np.float64),
                 )
-                if elapsed_time / self.track_dt >= len(self.tracked_frames):
+                if elapsed_time / self.track_dt >= len(self.tracked_traj.frames):
                     self.track_frame()
                 time.sleep(self.arm_ctrl_dt)
 
@@ -245,13 +285,12 @@ class PoseTracker:
             home_posture = sdk.homoToPosture(home_transformation)
             assert (
                 np.linalg.norm(
-                    np.array(trajectory[0].ee_posture) - np.array(home_posture)
+                    np.array(trajectory.frames[0].ee_posture) - np.array(home_posture)
                 )
                 < 0.1
             ), f"Trajectory starting point should be close enough to home position {home_posture}"
             return False
-
-
+    
 if __name__ == "__main__":
 
     arm = sdk.ArmInterface(hasGripper=True)
@@ -259,11 +298,19 @@ if __name__ == "__main__":
     duration = 10
     track_dt = 0.002
 
-    file_name = f"logs/trajectories/teleop_duration{duration}_dt{track_dt}.json"
+    ref_file_name = f"logs/trajectories/teleop_duration{duration}_dt{track_dt}.json"
+    replay_file_name = f"logs/trajectories/replay_duration{duration}_dt{track_dt}.json"
     pt = PoseTracker(arm, teleop_dt=0.02, track_dt=track_dt)
     # pt.start_teleop_tracking(duration)
     # pt.save_frames()
 
-    trajectory = pt.load_frames(file_name)
-    pt.replay_trajectory(trajectory, sdk.ArmFSMState.JOINTCTRL)
-    pt.save_frames(file_name.replace("teleop", "replay"))
+    ref_traj = Trajectory(file_name=ref_file_name)
+    replay_traj = Trajectory(file_name=replay_file_name)
+    
+    interp_traj = ref_traj.interp_traj([frame.timestamp for frame in replay_traj.frames])
+
+    # pt.replay_trajectory(trajectory, sdk.ArmFSMState.JOINTCTRL)
+    # pt.save_frames(file_name.replace("teleop", "replay"))
+
+    
+
