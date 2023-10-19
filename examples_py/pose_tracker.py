@@ -321,17 +321,13 @@ class PoseTracker:
         duration: float,
         back_to_start=True,
         oriSpeed: float = 0.6,
-        posSpeed: float = 0.3,
-        arm_kp: List[float] = [20.0, 30.0, 30.0, 20.0, 15.0, 10.0, 20.0]
+        posSpeed: float = 0.3
     ):
         assert 0 < stiffness <= 1, "stiffness should be in (0, 1]"
         self.arm.loopOn()
         self.arm.setFsm(sdk.ArmFSMState.PASSIVE)
 
         # Not sure whether this kd adjustment work in cartesian space control
-
-        kd = self.arm.lowcmd.kd
-        self.arm.lowcmd.setControlGain(arm_kp, kd)
         if back_to_start:
             print(
                 "Setting the arm back to start. Pass `back_to_start=False` to disable this initialization"
@@ -433,11 +429,59 @@ class PoseTracker:
 
         self.arm.loopOff()
 
+        
+    def init_arm(self, init_frame: Frame, ctrl_method: sdk.ArmFSMState, init_timeout: float = 5):
+        assert ctrl_method in [
+            sdk.ArmFSMState.JOINTCTRL,
+            sdk.ArmFSMState.CARTESIAN,
+            sdk.ArmFSMState.LOWCMD,
+        ], "ctrl_method should be either sdk.ArmFSMState.JOINTCTRL, sdk.ArmFSMState.CARTESIAN or sdk.ArmFSMState.LOWCMD"
+
+        self.arm.backToStart()
+        self.arm.setArmCmd(
+            np.zeros(6, dtype=np.float64),
+            np.zeros(6, dtype=np.float64),
+            np.zeros(6, dtype=np.float64),
+        )
+        if ctrl_method == sdk.ArmFSMState.JOINTCTRL:
+            self.arm.startTrack(sdk.ArmFSMState.JOINTCTRL)
+        elif ctrl_method == sdk.ArmFSMState.LOWCMD:
+            self.arm.setFsmLowcmd()
+        init_start_time = time.monotonic()
+
+        while True:
+            # Initialize arm position
+            self.arm.setArmCmd(
+                np.array(init_frame.joint_q),
+                np.array(init_frame.joint_dq),
+                np.zeros(6, dtype=np.float64),
+            )
+            self.arm.setGripperCmd(
+                init_frame.gripper_q[0],
+                init_frame.gripper_dq[0],
+                0.0,
+            )
+            time.sleep(self.arm_ctrl_dt)
+            if (
+                np.linalg.norm(
+                    np.array(init_frame.joint_q)
+                    - np.array(self.arm.lowstate.q[0:6])
+                )
+                < 0.05
+            ):
+                print(f"Initialization complete! Start replaying trajectory.")
+                return True
+            if time.monotonic() - init_start_time > init_timeout:
+                print(
+                    f"Failed initialization in {init_timeout}. Please reset trajectory or timeout."
+                )
+                return False
+            
+
     def replay_traj(
         self,
         trajectory: Trajectory,
         ctrl_method: sdk.ArmFSMState,
-        init_timeout: float = 5,
         back_to_start=True,
     ) -> bool:
         """Replay trajectory and recording new frames at the same time. Will return True if succeed"""
@@ -445,7 +489,8 @@ class PoseTracker:
         assert ctrl_method in [
             sdk.ArmFSMState.JOINTCTRL,
             sdk.ArmFSMState.CARTESIAN,
-        ], "ctrl_method should be either sdk.ArmFSMState.JOINTCTRL or sdk.ArmFSMState.CARTESIAN"
+            sdk.ArmFSMState.LOWCMD,
+        ], "ctrl_method should be either sdk.ArmFSMState.JOINTCTRL, sdk.ArmFSMState.CARTESIAN or sdk.ArmFSMState.LOWCMD"
 
         print(f"Start replaying trajectory!")
         self.arm.loopOn()
@@ -454,92 +499,14 @@ class PoseTracker:
             assert trajectory.is_initialized(
                 "joint_q"
             ), "frame.joint_q in trajectory is not initialized"
-
-            self.arm.backToStart()
-            self.arm.setArmCmd(
-                np.zeros(6, dtype=np.float64),
-                np.zeros(6, dtype=np.float64),
-                np.zeros(6, dtype=np.float64),
-            )
-            self.arm.startTrack(sdk.ArmFSMState.JOINTCTRL)
-            init_start_time = time.monotonic()
-
-            while True:
-                self.arm.setArmCmd(
-                    np.array(trajectory.frames[0].joint_q),
-                    np.array(trajectory.frames[0].joint_dq),
-                    np.zeros(6, dtype=np.float64),
-                )
-                self.arm.setGripperCmd(
-                    trajectory.frames[0].gripper_q[0],
-                    trajectory.frames[0].gripper_dq[0],
-                    0.0,
-                )
-                time.sleep(self.arm_ctrl_dt)
-                if (
-                    np.linalg.norm(
-                        np.array(trajectory.frames[0].joint_q)
-                        - np.array(self.arm.lowstate.q[0:6])
-                    )
-                    < 0.05
-                ):
-                    print(f"Initialization complete! Start replaying trajectory.")
-                    break
-                if time.monotonic() - init_start_time > init_timeout:
-                    print(
-                        f"Failed initialization in {init_timeout}. Please reset trajectory or timeout."
-                    )
-                    return False
-
-            self.reset()
-            traj_frame_num = 0  # Frame number to be set as target of the new trajectory
-            ctrl_frame_num = 0  # Frame number of the arm control communciation (period=self.arm_ctrl_dt)
-            while True:
-                elapsed_time = time.monotonic() - self.start_time
-                print(f"Elapsed time: {elapsed_time:.3f}s", end="\r")
-                # Find the frame right after elapsed time
-                for k in range(traj_frame_num, len(trajectory.frames)):
-                    if trajectory.frames[k].timestamp > elapsed_time:
-                        traj_frame_num = k
-                        break
-                else:
-                    print(f"Finish replaying trajectory!")
-                    if back_to_start:
-                        self.arm.backToStart()
-                        self.arm.setArmCmd(
-                            np.zeros(6, dtype=np.float64),
-                            np.zeros(6, dtype=np.float64),
-                            np.zeros(6, dtype=np.float64),
-                        )
-                    self.arm.loopOff()
-                    return True
-
-                target_frame = trajectory.interp_single_frame(
-                    # elapsed_time, traj_frame_num, method="scipy", interp_attrs=["joint_q", "gripper_q"]
-                    elapsed_time, traj_frame_num, method="linear"
-                )
-                self.arm.setArmCmd(
-                    np.array(target_frame.joint_q),
-                    # np.array(target_frame.joint_dq),
-                    np.zeros(6, dtype=np.float64),
-                    np.zeros(6, dtype=np.float64),
-                )
-                self.arm.setGripperCmd(
-                    target_frame.gripper_q[0], 0.0, 0.0
-                )
-
-                if elapsed_time / self.track_dt >= len(self.tracked_traj.frames):
-                    self.track_frame()
-
-                # Maintain a control frequency of self.arm_ctrl_dt and reduce accumulated error
-                reference_time = (
-                    self.start_time + (ctrl_frame_num + 1) * self.arm_ctrl_dt
-                )
-                remaining_time = max(0, time.monotonic() - reference_time)
-                ctrl_frame_num += 1
-                time.sleep(remaining_time)
-
+            assert self.init_arm(trajectory.frames[0], ctrl_method), "Initialization failed"
+        elif ctrl_method == sdk.ArmFSMState.LOWCMD:
+            assert trajectory.is_initialized(
+                "joint_q"
+            ), "frame.joint_q in trajectory is not initialized"
+            assert self.init_arm(trajectory.frames[0], ctrl_method), "Initialization failed"
         else:
+            raise NotImplementedError("Cartesian control not implemented yet")
             home_joint_q = np.zeros(6, dtype=np.float64)
             home_transformation = self.arm._ctrlComp.armModel.forwardKinematics(
                 home_joint_q, 6
@@ -552,6 +519,73 @@ class PoseTracker:
                 < 0.1
             ), f"Trajectory starting point should be close enough to home position {home_posture}"
             return False
+        
+
+        self.reset()
+        traj_frame_num = 0  # Frame number to be set as target of the new trajectory
+        ctrl_frame_num = 0  # Frame number of the arm control communciation (period=self.arm_ctrl_dt)
+        while True:
+            elapsed_time = time.monotonic() - self.start_time
+            print(f"Elapsed time: {elapsed_time:.3f}s", end="\r")
+            # Find the frame right after elapsed time
+            for k in range(0, len(trajectory.frames)):
+                if trajectory.frames[k].timestamp > elapsed_time:
+                    traj_frame_num = k
+                    break
+            else:
+                print(f"Finish replaying trajectory!")
+                if back_to_start:
+                    self.arm.backToStart()
+                    self.arm.setArmCmd(
+                        np.zeros(6, dtype=np.float64),
+                        np.zeros(6, dtype=np.float64),
+                        np.zeros(6, dtype=np.float64),
+                    )
+                self.arm.loopOff()
+                return True
+
+            target_frame = trajectory.interp_single_frame(
+                # elapsed_time, traj_frame_num, method="scipy", interp_attrs=["joint_q", "gripper_q"]
+                elapsed_time, traj_frame_num, method="linear"
+            )
+
+            if ctrl_method == sdk.ArmFSMState.LOWCMD:
+                    # np.zeros(6, dtype=np.float64),
+                joint_tau = self.arm._ctrlComp.armModel.inverseDynamics(
+                    np.array(target_frame.joint_q),
+                    np.array(target_frame.joint_dq),
+                    np.zeros(6, dtype=np.float64),
+                    np.zeros(6, dtype=np.float64),
+                )
+            else:
+                joint_tau = np.zeros(6, dtype=np.float64)
+
+            self.arm.setArmCmd(
+                np.array(target_frame.joint_q),
+                np.array(target_frame.joint_dq),
+                # np.zeros(6, dtype=np.float64),
+                joint_tau,
+            )
+            self.arm.setGripperCmd(
+                target_frame.gripper_q[0], 0.0, 0.0
+            )
+
+            if elapsed_time / self.track_dt >= len(self.tracked_traj.frames):
+                self.track_frame()
+
+            # Maintain a control frequency of self.arm_ctrl_dt and reduce accumulated error
+            reference_time = (
+                self.start_time + (ctrl_frame_num + 1) * self.arm_ctrl_dt
+            )
+            remaining_time = max(0, time.monotonic() - reference_time)
+            ctrl_frame_num += 1
+
+            if ctrl_method == sdk.ArmFSMState.LOWCMD:
+                self.arm.sendRecv()
+
+            time.sleep(remaining_time)
+
+            
 
 
 if __name__ == "__main__":
@@ -569,13 +603,17 @@ if __name__ == "__main__":
     teleop_file_name = f"logs/trajectories/teleop_duration{duration}_dt{track_dt}.json"
     replay_file_name = f"logs/trajectories/replay_duration{duration}_dt{track_dt}.json"
     pt = PoseTracker(arm, teleop_dt=0.02, track_dt=track_dt)
-
-    default_kp = [20.0, 30.0, 30.0, 20.0, 15.0, 10.0, 20.0]
-
-    pt.start_teleop_tracking(duration, arm_kp=[kp*stiffness for kp in default_kp])
-    pt.tracked_traj.save_frames(teleop_file_name)
+    
+    # pt.start_teleop_tracking(duration)
+    # pt.tracked_traj.save_frames(teleop_file_name)
 
     ref_traj = Trajectory(file_name=teleop_file_name)
+
+    default_kp = [20.0, 30.0, 30.0, 20.0, 15.0, 10.0, 20.0]
+    kd = arm.lowcmd.kd
+    arm.setFsmLowcmd()
+    arm.lowcmd.setControlGain([kp*stiffness for kp in default_kp], kd)
+
     pt.replay_traj(ref_traj, ctrl_method=sdk.ArmFSMState.JOINTCTRL)
     pt.tracked_traj.save_frames(replay_file_name)
 
