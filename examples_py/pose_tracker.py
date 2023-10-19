@@ -8,6 +8,7 @@ from dataclasses import dataclass, asdict, field
 from spacemouse.spacemouse_shared_memory import Spacemouse
 from multiprocessing.managers import SharedMemoryManager
 from scipy.interpolate import interp1d
+from scipy.signal import convolve2d
 import matplotlib.pyplot as plt
 
 
@@ -200,8 +201,21 @@ class Trajectory:
                 )
 
             return new_frame
+    
+    def calc_difference(self, new_traj: "Trajectory"):
+        """
+        Calculate the difference of all attributes between two trajectories.
+        When applying this method, please make sure new_traj has the same timestamps as the current one.
+        """
+        assert len(self.frames) == len(new_traj.frames), "The two trajectories should have the same length"
+        diff_traj = Trajectory()
+        for k in range(len(self.frames)):
+            assert self.frames[k].timestamp == new_traj.frames[k].timestamp, "The two trajectories should have the same timestamps"
+            diff_traj.frames.append(self.frames[k]*(-1) + new_traj.frames[k])
+            diff_traj.frames[-1].timestamp = self.frames[k].timestamp
+        return diff_traj
 
-    def calc_difference(
+    def calc_difference_norm(
         self, new_traj: "Trajectory", attr_name: str, specify_axis: Optional[int] = None
     ):
         """
@@ -233,7 +247,44 @@ class Trajectory:
                 results.append(float(np.linalg.norm(new_val - self_val)))
 
         return results
+    
+    def measure_noise(self, padding: int = 5):
+        """Calculate noise of the trajectory through calculate average variance in a neighborhood around each element."""
+        avg_var = Frame(0)
+        for attr_name in Frame.LIST_ATTRS:
+            val_matrix = np.array([getattr(frame, attr_name) for frame in self.frames])
+            var_matrix = np.zeros_like(val_matrix, dtype=np.float64)
+            for k in range(var_matrix.shape[0]):
+                # Calculate the variance between [k-padding, k+padding] in each column 
+                var_matrix[k] = np.std(val_matrix[max(0, k-padding):min(k+padding, var_matrix.shape[0]-1)], axis=0)
+            setattr(avg_var, attr_name, np.mean(var_matrix, axis=0).tolist())
+        
+        return avg_var
+    
+    def get_moving_average(self, padding: int = 5):
+        """Apply np.convolve to smoothen the trajectory"""
+        new_frames = [Frame(frame.timestamp) for frame in self.frames]
+        for attr_name in Frame.LIST_ATTRS:
+            val_matrix = np.array([getattr(frame, attr_name) for frame in self.frames])
+            # Apply padding
+            padding_up = np.ones((padding, 1))@val_matrix[0].reshape((1, -1))
+            padding_down = np.ones((padding, 1))@val_matrix[-1].reshape((1, -1))
+            val_matrix_with_padding = np.concatenate([padding_up, val_matrix, padding_down], axis=0)
+            filter_result = convolve2d(val_matrix_with_padding, np.ones((padding*2+1, 1)), mode="valid")/(2*padding+1)
+            for k, new_frame in enumerate(new_frames):
+                setattr(new_frame, attr_name, filter_result[k].tolist())
+        return Trajectory(new_frames)
 
+    def plot_attr(self, attr_name):
+        assert attr_name in Frame.LIST_ATTRS
+        timestamps = [frame.timestamp for frame in self.frames]
+        vals = [getattr(frame, attr_name) for frame in self.frames]
+        dim = len(vals[0])
+        plt.figure()
+        for k in range(dim):
+            plt.plot(timestamps, [val[k] for val in vals])
+        plt.legend([f"{attr_name}_{k}" for k in range(dim)])
+        plt.xlabel("Time (s)")
 
 class PoseTracker:
     def __init__(self, arm: sdk.ArmInterface, teleop_dt: float, track_dt: float):
@@ -511,7 +562,7 @@ if __name__ == "__main__":
         np.zeros(6, dtype=np.float64),
     )
 
-    duration = 30
+    duration = 15
     track_dt = 0.01
     stiffness = 0.5
 
@@ -521,7 +572,7 @@ if __name__ == "__main__":
 
     default_kp = [20.0, 30.0, 30.0, 20.0, 15.0, 10.0, 20.0]
 
-    pt.start_teleop_tracking(duration, arm_kp=[kp/2 for kp in default_kp])
+    pt.start_teleop_tracking(duration, arm_kp=[kp*stiffness for kp in default_kp])
     pt.tracked_traj.save_frames(teleop_file_name)
 
     ref_traj = Trajectory(file_name=teleop_file_name)
@@ -532,9 +583,22 @@ if __name__ == "__main__":
     replay_timestamps = [frame.timestamp for frame in replay_traj.frames]
 
     interp_traj = ref_traj.interp_traj(replay_timestamps)
-    diff = interp_traj.calc_difference(replay_traj, "joint_q")
-    plt.plot(replay_timestamps, diff)
+    diff_traj = interp_traj.calc_difference(replay_traj)
+    ref_traj.plot_attr("joint_q")
+    replay_traj.plot_attr("joint_q")
+    diff_traj.plot_attr("joint_q")
     plt.show()
+    
+    # teleop_traj = Trajectory(file_name=teleop_file_name)
+    # replay_traj = Trajectory(file_name=replay_file_name)
 
-    # pt.replay_traj(trajectory, sdk.ArmFSMState.JOINTCTRL)
-    # pt.tracked_traj.save_frames(replay_file_name)
+    # print(teleop_traj.measure_noise().joint_tau)
+    # # print(replay_traj.measure_noise())
+
+    # filtered_traj = teleop_traj.get_moving_average()
+
+    # print(filtered_traj.measure_noise().joint_tau)
+
+    # teleop_traj.plot_attr("joint_tau")
+    # filtered_traj.plot_attr("joint_tau")
+    # plt.show()
