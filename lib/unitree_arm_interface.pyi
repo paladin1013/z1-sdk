@@ -75,9 +75,9 @@ class LowlevelCmd:
     tau: List[float]
     """7 elements"""
     kp: List[float]
-    """7 elements"""
+    """7 elements, by default [20.0, 30.0, 30.0, 20.0, 15.0, 10.0, 20.0]"""
     kd: List[float]
-    """7 elements"""
+    """7 elements, by default [2000.0, 2000.0, 2000.0, 2000.0, 2000.0, 2000.0, 2000.0]"""
     posture: npt.NDArray[np.float64]
     """6 elements, (row, pitch, yaw, x, y, z)"""
 

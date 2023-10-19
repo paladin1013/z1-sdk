@@ -75,6 +75,9 @@ class Trajectory:
                     self.frames = [Frame(**frame) for frame in json_data]
         else:
             self.frames = frames
+        
+        self.interp_functions: Dict[str, List[interp1d]] = {}
+
 
     def save_frames(self, file_name: str):
         with open(file_name, "w") as f:
@@ -101,7 +104,7 @@ class Trajectory:
             dim = len(y[0])
             for k in range(dim):
                 y_k = [_[k] for _ in y]
-                f_k = interp1d(x, y_k, bounds_error=False, fill_value="extrapolate")
+                f_k = interp1d(x, y_k, bounds_error=False, fill_value="extrapolate", assume_sorted=True)
                 raw_results.append(f_k(x_new))
 
             results = [
@@ -121,11 +124,25 @@ class Trajectory:
 
         return new_traj
 
+    def init_interp_function(self):
+        assert self.frames, "self.frames is empty! Please initialize the trajectory."
+        timestamps = [frame.timestamp for frame in self.frames]
+        for attr_name in Frame.LIST_ATTRS:
+            dim = len(getattr(self.frames[0], attr_name))
+            self.interp_functions[attr_name] = []
+            for k in range(dim):
+                vals = [getattr(frame, attr_name)[k] for frame in self.frames]
+                f_k = interp1d(timestamps, vals, bounds_error=False, fill_value="extrapolate", assume_sorted=True)
+                self.interp_functions[attr_name].append(f_k)
+
+        
+
     def interp_single_frame(
         self,
         new_timestamp: float,
         next_frame_idx: Optional[int] = None,
         method: str = "linear",
+        interp_attrs: List[str] = Frame.LIST_ATTRS
     ):
         """next_frame_idx is the frame number that is the first to have a larger timestamp than new_timestamp.
         Will return the self.frames[0] if next_frame_idx = 0
@@ -159,6 +176,24 @@ class Trajectory:
                 )
                 new_frame = self.frames[next_frame_idx - 1] * prev_ratio + \
                     self.frames[next_frame_idx] * (1 - prev_ratio)
+            
+            elif method == "scipy":
+                raise NotImplementedError("Computation speed is too slow. Need to be optimized")
+                start_time = time.monotonic()
+                if not self.interp_functions:
+                    self.init_interp_function()
+
+                new_frame = Frame(new_timestamp)
+                for attr_name in interp_attrs:
+                    dim = len(getattr(new_frame, attr_name))
+                    new_val:List[float] = []
+                    for k in range(dim):
+                        new_val.append(self.interp_functions[attr_name][k](new_timestamp))
+                    setattr(new_frame, attr_name, new_val)
+                
+                print(f"Interpolate time {time.monotonic() - start_time:.5f}s")
+
+
             else:
                 raise NotImplementedError(
                     f"Interpolation method {method} not implemented."
@@ -236,9 +271,16 @@ class PoseTracker:
         back_to_start=True,
         oriSpeed: float = 0.6,
         posSpeed: float = 0.3,
+        arm_kp: List[float] = [20.0, 30.0, 30.0, 20.0, 15.0, 10.0, 20.0]
     ):
+        assert 0 < stiffness <= 1, "stiffness should be in (0, 1]"
         self.arm.loopOn()
         self.arm.setFsm(sdk.ArmFSMState.PASSIVE)
+
+        # Not sure whether this kd adjustment work in cartesian space control
+
+        kd = self.arm.lowcmd.kd
+        self.arm.lowcmd.setControlGain(arm_kp, kd)
         if back_to_start:
             print(
                 "Setting the arm back to start. Pass `back_to_start=False` to disable this initialization"
@@ -401,7 +443,6 @@ class PoseTracker:
             self.reset()
             traj_frame_num = 0  # Frame number to be set as target of the new trajectory
             ctrl_frame_num = 0  # Frame number of the arm control communciation (period=self.arm_ctrl_dt)
-
             while True:
                 elapsed_time = time.monotonic() - self.start_time
                 print(f"Elapsed time: {elapsed_time:.3f}s", end="\r")
@@ -423,15 +464,17 @@ class PoseTracker:
                     return True
 
                 target_frame = trajectory.interp_single_frame(
-                    elapsed_time, traj_frame_num
+                    # elapsed_time, traj_frame_num, method="scipy", interp_attrs=["joint_q", "gripper_q"]
+                    elapsed_time, traj_frame_num, method="linear"
                 )
                 self.arm.setArmCmd(
                     np.array(target_frame.joint_q),
-                    np.array(target_frame.joint_dq),
+                    # np.array(target_frame.joint_dq),
+                    np.zeros(6, dtype=np.float64),
                     np.zeros(6, dtype=np.float64),
                 )
                 self.arm.setGripperCmd(
-                    target_frame.gripper_q[0], target_frame.gripper_dq[0], 0.0
+                    target_frame.gripper_q[0], 0.0, 0.0
                 )
 
                 if elapsed_time / self.track_dt >= len(self.tracked_traj.frames):
@@ -462,14 +505,23 @@ class PoseTracker:
 
 if __name__ == "__main__":
     arm = sdk.ArmInterface(hasGripper=True)
+    arm.setArmCmd(
+        np.zeros(6, dtype=np.float64),
+        np.zeros(6, dtype=np.float64),
+        np.zeros(6, dtype=np.float64),
+    )
 
-    duration = 10
+    duration = 30
     track_dt = 0.01
+    stiffness = 0.5
 
     teleop_file_name = f"logs/trajectories/teleop_duration{duration}_dt{track_dt}.json"
     replay_file_name = f"logs/trajectories/replay_duration{duration}_dt{track_dt}.json"
     pt = PoseTracker(arm, teleop_dt=0.02, track_dt=track_dt)
-    pt.start_teleop_tracking(duration)
+
+    default_kp = [20.0, 30.0, 30.0, 20.0, 15.0, 10.0, 20.0]
+
+    pt.start_teleop_tracking(duration, arm_kp=[kp/2 for kp in default_kp])
     pt.tracked_traj.save_frames(teleop_file_name)
 
     ref_traj = Trajectory(file_name=teleop_file_name)
