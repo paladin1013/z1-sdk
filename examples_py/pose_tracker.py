@@ -286,6 +286,30 @@ class Trajectory:
         plt.legend([f"{attr_name}_{k}" for k in range(dim)])
         plt.xlabel("Time (s)")
 
+    def update_joint_dq(self, padding: int=5):
+        """Calculate average speed in [k-padding, k+padding] for each joint and update in self.frames[k].joint_dq"""
+        for k, frame in enumerate(self.frames):
+            if k < padding or k >= len(self.frames) - padding:
+                continue
+            prev_frame = self.frames[k-padding]
+            next_frame = self.frames[k+padding]
+            frame.joint_dq = (np.array(next_frame.joint_q) - np.array(prev_frame.joint_q))/(next_frame.timestamp - prev_frame.timestamp)
+
+    def update_joint_tau(self, arm: sdk.ArmInterface, padding: int=1):
+        """Calculate average torque in [k-padding, k+padding] for each joint and update in self.frames[k].joint_tau"""
+        for k, frame in enumerate(self.frames):
+            if k < padding or k >= len(self.frames) - padding:
+                continue
+            prev_frame = self.frames[k-padding]
+            next_frame = self.frames[k+padding]
+            joint_ddq = (np.array(next_frame.joint_dq) - np.array(prev_frame.joint_dq))/(next_frame.timestamp - prev_frame.timestamp)
+            frame.joint_tau = arm._ctrlComp.armModel.inverseDynamics(
+                np.array(frame.joint_q),
+                np.array(frame.joint_dq),
+                joint_ddq,
+                np.zeros(6, dtype=np.float64)
+            ).tolist()
+
 class PoseTracker:
     def __init__(self, arm: sdk.ArmInterface, teleop_dt: float, track_dt: float):
         self.arm = arm
@@ -323,7 +347,6 @@ class PoseTracker:
         oriSpeed: float = 0.6,
         posSpeed: float = 0.3
     ):
-        assert 0 < stiffness <= 1, "stiffness should be in (0, 1]"
         self.arm.loopOn()
         self.arm.setFsm(sdk.ArmFSMState.PASSIVE)
 
@@ -436,7 +459,7 @@ class PoseTracker:
             sdk.ArmFSMState.CARTESIAN,
             sdk.ArmFSMState.LOWCMD,
         ], "ctrl_method should be either sdk.ArmFSMState.JOINTCTRL, sdk.ArmFSMState.CARTESIAN or sdk.ArmFSMState.LOWCMD"
-
+        self.arm.setFsm(sdk.ArmFSMState.PASSIVE)
         self.arm.backToStart()
         self.arm.setArmCmd(
             np.zeros(6, dtype=np.float64),
@@ -447,6 +470,10 @@ class PoseTracker:
             self.arm.startTrack(sdk.ArmFSMState.JOINTCTRL)
         elif ctrl_method == sdk.ArmFSMState.LOWCMD:
             self.arm.setFsmLowcmd()
+            default_kp = np.array([20.0, 30.0, 30.0, 20.0, 15.0, 10.0, 20.0])
+            kd = self.arm.lowcmd.kd
+            self.arm.setFsmLowcmd()
+            self.arm.lowcmd.setControlGain(stiffness* default_kp, kd)
         init_start_time = time.monotonic()
 
         while True:
@@ -461,6 +488,9 @@ class PoseTracker:
                 init_frame.gripper_dq[0],
                 0.0,
             )
+            if ctrl_method == sdk.ArmFSMState.LOWCMD:
+                self.arm.sendRecv()
+                
             time.sleep(self.arm_ctrl_dt)
             if (
                 np.linalg.norm(
@@ -483,6 +513,7 @@ class PoseTracker:
         trajectory: Trajectory,
         ctrl_method: sdk.ArmFSMState,
         back_to_start=True,
+        stiffness: Optional[float] = None,
     ) -> bool:
         """Replay trajectory and recording new frames at the same time. Will return True if succeed"""
 
@@ -491,6 +522,15 @@ class PoseTracker:
             sdk.ArmFSMState.CARTESIAN,
             sdk.ArmFSMState.LOWCMD,
         ], "ctrl_method should be either sdk.ArmFSMState.JOINTCTRL, sdk.ArmFSMState.CARTESIAN or sdk.ArmFSMState.LOWCMD"
+        
+        if ctrl_method == sdk.ArmFSMState.LOWCMD:
+            if stiffness is None:
+                stiffness = 0.5
+            else:
+                assert 0 < stiffness <= 1, "stiffness should be in (0, 1]"
+        else:
+            assert stiffness is None, "stiffness does not apply if ctrl_method is not sdk.ArmFSMState.LOWCMD"
+
 
         print(f"Start replaying trajectory!")
         self.arm.loopOn()
@@ -505,6 +545,7 @@ class PoseTracker:
                 "joint_q"
             ), "frame.joint_q in trajectory is not initialized"
             assert self.init_arm(trajectory.frames[0], ctrl_method), "Initialization failed"
+            self.arm.loopOff()
         else:
             raise NotImplementedError("Cartesian control not implemented yet")
             home_joint_q = np.zeros(6, dtype=np.float64)
@@ -526,15 +567,16 @@ class PoseTracker:
         ctrl_frame_num = 0  # Frame number of the arm control communciation (period=self.arm_ctrl_dt)
         while True:
             elapsed_time = time.monotonic() - self.start_time
-            print(f"Elapsed time: {elapsed_time:.3f}s", end="\r")
+            # print(f"Elapsed time: {elapsed_time:.3f}s", end="\r")
             # Find the frame right after elapsed time
             for k in range(0, len(trajectory.frames)):
                 if trajectory.frames[k].timestamp > elapsed_time:
                     traj_frame_num = k
                     break
             else:
-                print(f"Finish replaying trajectory!")
+                print(f"\nFinish replaying trajectory!")
                 if back_to_start:
+                    self.arm.loopOn()
                     self.arm.backToStart()
                     self.arm.setArmCmd(
                         np.zeros(6, dtype=np.float64),
@@ -543,47 +585,54 @@ class PoseTracker:
                     )
                 self.arm.loopOff()
                 return True
-
+            loop_start_time = time.monotonic()
             target_frame = trajectory.interp_single_frame(
                 # elapsed_time, traj_frame_num, method="scipy", interp_attrs=["joint_q", "gripper_q"]
                 elapsed_time, traj_frame_num, method="linear"
             )
+            interp_end_time = time.monotonic()
 
             if ctrl_method == sdk.ArmFSMState.LOWCMD:
-                    # np.zeros(6, dtype=np.float64),
-                joint_tau = self.arm._ctrlComp.armModel.inverseDynamics(
-                    np.array(target_frame.joint_q),
-                    np.array(target_frame.joint_dq),
-                    np.zeros(6, dtype=np.float64),
-                    np.zeros(6, dtype=np.float64),
-                )
+                joint_tau = np.array(target_frame.joint_tau)
             else:
                 joint_tau = np.zeros(6, dtype=np.float64)
 
             self.arm.setArmCmd(
                 np.array(target_frame.joint_q),
                 np.array(target_frame.joint_dq),
-                # np.zeros(6, dtype=np.float64),
                 joint_tau,
             )
+            set_arm_cmd_end_time = time.monotonic()
             self.arm.setGripperCmd(
                 target_frame.gripper_q[0], 0.0, 0.0
             )
+            set_gripper_cmd_end_time = time.monotonic()
 
             if elapsed_time / self.track_dt >= len(self.tracked_traj.frames):
                 self.track_frame()
+
+
+            ctrl_frame_num += 1
+
+            if ctrl_method == sdk.ArmFSMState.LOWCMD:
+                self.arm.sendRecv()
+            sendrecv_end_time = time.monotonic()
 
             # Maintain a control frequency of self.arm_ctrl_dt and reduce accumulated error
             reference_time = (
                 self.start_time + (ctrl_frame_num + 1) * self.arm_ctrl_dt
             )
-            remaining_time = max(0, time.monotonic() - reference_time)
-            ctrl_frame_num += 1
-
-            if ctrl_method == sdk.ArmFSMState.LOWCMD:
-                self.arm.sendRecv()
+            remaining_time = max(0, reference_time - time.monotonic())
 
             time.sleep(remaining_time)
+
+            sleep_end_time = time.monotonic()
+
+            print(f"Elapsed: {sleep_end_time - self.start_time:>5.3f}, interp: {interp_end_time - loop_start_time:.5f}, set_arm_cmd: {set_arm_cmd_end_time - interp_end_time:.5f}, \
+set_gripper_cmd: {set_gripper_cmd_end_time - set_arm_cmd_end_time:.5f}, \
+sendrecv: {sendrecv_end_time - set_gripper_cmd_end_time:.5f}, \
+sleep: {sleep_end_time - sendrecv_end_time:.5f}", end="\r")
+            
 
             
 
@@ -597,24 +646,21 @@ if __name__ == "__main__":
     )
 
     duration = 15
-    track_dt = 0.01
-    stiffness = 0.5
+    track_dt = 0.02
+    stiffness = 0.3
 
     teleop_file_name = f"logs/trajectories/teleop_duration{duration}_dt{track_dt}.json"
-    replay_file_name = f"logs/trajectories/replay_duration{duration}_dt{track_dt}.json"
+    replay_file_name = f"logs/trajectories/replay_duration{duration}_dt{track_dt}_stiffness{stiffness}.json"
     pt = PoseTracker(arm, teleop_dt=0.02, track_dt=track_dt)
     
-    # pt.start_teleop_tracking(duration)
-    # pt.tracked_traj.save_frames(teleop_file_name)
+    pt.start_teleop_tracking(duration)
+    pt.tracked_traj.save_frames(teleop_file_name)
 
     ref_traj = Trajectory(file_name=teleop_file_name)
 
-    default_kp = [20.0, 30.0, 30.0, 20.0, 15.0, 10.0, 20.0]
-    kd = arm.lowcmd.kd
-    arm.setFsmLowcmd()
-    arm.lowcmd.setControlGain([kp*stiffness for kp in default_kp], kd)
-
-    pt.replay_traj(ref_traj, ctrl_method=sdk.ArmFSMState.JOINTCTRL)
+    ref_traj.update_joint_dq(padding=2)
+    ref_traj.update_joint_tau(arm)
+    pt.replay_traj(ref_traj, ctrl_method=sdk.ArmFSMState.LOWCMD, stiffness=stiffness)
     pt.tracked_traj.save_frames(replay_file_name)
 
     replay_traj = Trajectory(file_name=replay_file_name)
@@ -630,12 +676,12 @@ if __name__ == "__main__":
     # teleop_traj = Trajectory(file_name=teleop_file_name)
     # replay_traj = Trajectory(file_name=replay_file_name)
 
-    # print(teleop_traj.measure_noise().joint_tau)
+    # print(teleop_traj.measure_noise().joint_dq)
     # # print(replay_traj.measure_noise())
 
-    # filtered_traj = teleop_traj.get_moving_average()
+    # teleop_traj.update_joint_dq()
 
-    # print(filtered_traj.measure_noise().joint_tau)
+    # print(teleop_traj.measure_noise().joint_dq)
 
     # teleop_traj.plot_attr("joint_tau")
     # filtered_traj.plot_attr("joint_tau")
