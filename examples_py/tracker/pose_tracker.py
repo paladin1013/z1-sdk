@@ -4,7 +4,11 @@ import time
 from .spacemouse import Spacemouse
 from multiprocessing.managers import SharedMemoryManager
 from .trajectory import Trajectory, Frame
-from typing import Optional
+from typing import Optional, cast, List
+from matplotlib.figure import Figure
+from matplotlib.axes import Axes
+import matplotlib.pyplot as plt
+import numpy.typing as npt
 
 
 class PoseTracker:
@@ -270,7 +274,7 @@ class PoseTracker:
             elapsed_time = time.monotonic() - self.start_time
             # print(f"Elapsed time: {elapsed_time:.3f}s", end="\r")
             # Find the frame right after elapsed time
-            for k in range(0, len(trajectory.frames)):
+            for k in range(traj_frame_num, len(trajectory.frames)):
                 if trajectory.frames[k].timestamp > elapsed_time:
                     traj_frame_num = k
                     break
@@ -302,10 +306,9 @@ class PoseTracker:
 
             self.arm.setArmCmd(
                 np.array(target_frame.joint_q),
-                np.array(target_frame.joint_dq),
+                np.array(target_frame.joint_dq)*0.1,
                 joint_tau,
             )
-            set_arm_cmd_end_time = time.monotonic()
             self.arm.setGripperCmd(target_frame.gripper_q[0], 0.0, 0.0)
             set_gripper_cmd_end_time = time.monotonic()
 
@@ -327,9 +330,48 @@ class PoseTracker:
             sleep_end_time = time.monotonic()
 
             print(
-                f"Elapsed: {sleep_end_time - self.start_time:>5.3f}, interp: {interp_end_time - loop_start_time:.5f}, set_arm_cmd: {set_arm_cmd_end_time - interp_end_time:.5f}, \
-set_gripper_cmd: {set_gripper_cmd_end_time - set_arm_cmd_end_time:.5f}, \
+                f"Elapsed: {sleep_end_time - self.start_time:>5.3f}, interp: {interp_end_time - loop_start_time:.5f}, \
 sendrecv: {sendrecv_end_time - set_gripper_cmd_end_time:.5f}, \
 sleep: {sleep_end_time - sendrecv_end_time:.5f}",
                 end="\r",
             )
+    
+    def compare_traj(
+        self, 
+        reference_traj: Trajectory, 
+        tracked_traj: Trajectory, 
+        start_time: Optional[float] = None,
+        end_time: Optional[float] = None,
+        fig: Optional[Figure] = None,
+    ):
+        """
+        Draw 3*3 subplots. 
+        Three lines in each subplot: reference, tracked, difference.
+        Three columns in each subplot: joint_q, joint_dq, joint_tau.
+        """
+        reference_traj = reference_traj.interp_traj([frame.timestamp for frame in tracked_traj.frames])
+        diff_traj = reference_traj.calc_difference(tracked_traj)
+        if fig is None:
+            fig = plt.figure()
+        axes = fig.subplots(3, 3)
+        axes = cast(List[List[Axes]], axes)
+        if start_time is None:
+            start_time = 0
+        if end_time is None:
+            end_time = min(
+                reference_traj.frames[-1].timestamp,
+                tracked_traj.frames[-1].timestamp,
+            )
+        attr_names = ["joint_q", "joint_dq", "joint_tau"]
+        trajs = [reference_traj, tracked_traj, diff_traj]
+        traj_names = ["reference", "tracked", "difference"]
+        for i in range(3):
+            for j in range(3):
+                trajs[i].plot_attr(
+                    attr_names[j],
+                    ax=axes[i][j],
+                    title=f"{traj_names[i]} {attr_names[j]}",
+                )
+                axes[i][j].set_xlim(start_time, end_time)
+        return diff_traj, fig
+    

@@ -1,14 +1,19 @@
 import numpy as np
+import numpy.typing as npt
 import json
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, cast
 from dataclasses import dataclass, asdict, field
 import matplotlib.pyplot as plt
+from matplotlib.axes import Axes
+from matplotlib.figure import Figure
 from scipy.interpolate import interp1d
 from scipy.signal import convolve2d
 import unitree_arm_interface as sdk
-
+from tqdm import tqdm
+import time
 @dataclass
 class Frame:
+    # Using np.ndarray might be better
     timestamp: float
     joint_q: List[float] = field(default_factory=lambda: [0 for k in range(6)])
     """6 elements, from joint 1 to joint 6, unit: rad"""
@@ -74,6 +79,29 @@ class Trajectory:
         
         self.interp_functions: Dict[str, List[interp1d]] = {}
 
+        self.np_arrays: Dict[str, npt.NDArray[np.float64]] = {}
+        """For faster computation as a whole trajectory. Values should be kept the same as self.frames. 
+        Keys includes `timestamps` and all attributes in `Frame.LIST_ATTRS`"""
+
+        self.update_np_arrays()
+
+    def update_np_arrays(self):    
+        """Synchronize the numpy arrays with the current frames"""
+        self.np_arrays["timestamps"] = np.array([frame.timestamp for frame in self.frames])
+        for attr_name in Frame.LIST_ATTRS:
+            self.np_arrays[attr_name] = np.array([getattr(frame, attr_name) for frame in self.frames])
+
+    def update_frames(self):
+        """Synchronize the frames with the current numpy arrays"""
+        # Match the length of frames and timestamps:
+        if len(self.frames) != len(self.np_arrays["timestamps"]):
+            self.frames = self.frames[:len(self.np_arrays["timestamps"])]
+
+        for k, frame in enumerate(self.frames):
+            frame.timestamp = self.np_arrays["timestamps"][k]
+            for attr_name in Frame.LIST_ATTRS:
+                array:npt.NDArray = self.np_arrays[attr_name][k]
+                setattr(frame, attr_name, array.tolist())
 
     def save_frames(self, file_name: str):
         with open(file_name, "w") as f:
@@ -84,39 +112,46 @@ class Trajectory:
 
         return any([any(getattr(frame, attr_name)) for frame in self.frames])
 
-    def interp_traj(self, new_timestamps: List[float]):
+    def interp_traj(self, new_timestamps: List[float], attr_names: List[str] = Frame.LIST_ATTRS):
         """This method will interpolate a new trajectory, using the postures and the joint states from
         the reference trajectory, and query at the input timestamps."""
 
         ref_timestamps = [frame.timestamp for frame in self.frames]
+        if not self.interp_functions:
+            self.init_interp_function()
 
-        def interpnd(
-            x: List[float], y: List[List[float]], x_new: List[float]
-        ) -> List[List[float]]:
-            assert all(
-                [len(_) == len(y[0]) for _ in y]
-            ), "The input data of y should have the same dimension."
-            raw_results: List[List[float]] = []
-            dim = len(y[0])
-            for k in range(dim):
-                y_k = [_[k] for _ in y]
-                f_k = interp1d(x, y_k, bounds_error=False, fill_value="extrapolate", assume_sorted=True)
-                raw_results.append(f_k(x_new))
+        # def interpnd(
+        #     x: List[float], y: List[List[float]], x_new: List[float]
+        # ) -> List[List[float]]:
+        #     assert all(
+        #         [len(_) == len(y[0]) for _ in y]
+        #     ), "The input data of y should have the same dimension."
+        #     raw_results: List[List[float]] = []
+        #     dim = len(y[0])
+        #     for k in range(dim):
+        #         y_k = [_[k] for _ in y]
+        #         f_k = interp1d(x, y_k, bounds_error=False, fill_value="extrapolate", assume_sorted=True)
+        #         raw_results.append(f_k(x_new))
 
-            results = [
-                [raw_results[i][j] for i in range(dim)] for j in range(len(x_new))
-            ]
-            return results
+        #     results = [
+        #         [raw_results[i][j] for i in range(dim)] for j in range(len(x_new))
+        #     ]
+        #     return results
 
         new_traj = Trajectory([Frame(timestamp) for timestamp in new_timestamps])
 
         # Interpolate all attributes
-        for attr_name in Frame.LIST_ATTRS:
+        for attr_name in attr_names:
             ref_val = [getattr(frame, attr_name) for frame in self.frames]
-
-            interp_val = interpnd(ref_timestamps, ref_val, new_timestamps)
+            dim = len(ref_val[0])
+            interp_val = []
+            for k in range(dim):
+                interp_val.append(self.interp_functions[attr_name][k](new_timestamps))
+            interp_val_reshaped = [
+                [interp_val[i][j] for i in range(dim)] for j in range(len(new_timestamps))
+            ]
             for k in range(len(new_timestamps)):
-                setattr(new_traj.frames[k], attr_name, interp_val[k])
+                setattr(new_traj.frames[k], attr_name, interp_val_reshaped[k])
 
         return new_traj
 
@@ -270,16 +305,21 @@ class Trajectory:
                 setattr(new_frame, attr_name, filter_result[k].tolist())
         return Trajectory(new_frames)
 
-    def plot_attr(self, attr_name):
+    def plot_attr(self, attr_name, ax:Optional[Axes] = None, title: Optional[str] = None):
         assert attr_name in Frame.LIST_ATTRS
         timestamps = [frame.timestamp for frame in self.frames]
         vals = [getattr(frame, attr_name) for frame in self.frames]
         dim = len(vals[0])
-        plt.figure()
+        if ax is None:
+            fig = plt.figure()
+            ax = plt.axes()
+            ax = cast(Axes, ax)
+            fig.add_axes(ax)
         for k in range(dim):
-            plt.plot(timestamps, [val[k] for val in vals])
-        plt.legend([f"{attr_name}_{k}" for k in range(dim)])
-        plt.xlabel("Time (s)")
+            ax.plot(timestamps, [val[k] for val in vals])
+        ax.legend([f"{attr_name}_{k}" for k in range(dim)])
+        ax.set_xlabel("Time (s)")
+        ax.set_title(f"{title}")
 
     def update_joint_dq(self, padding: int=5):
         """Calculate average speed in [k-padding, k+padding] for each joint and update in self.frames[k].joint_dq"""
@@ -288,9 +328,10 @@ class Trajectory:
                 continue
             prev_frame = self.frames[k-padding]
             next_frame = self.frames[k+padding]
-            frame.joint_dq = (np.array(next_frame.joint_q) - np.array(prev_frame.joint_q))/(next_frame.timestamp - prev_frame.timestamp)
+            joint_dq_np = (np.array(next_frame.joint_q) - np.array(prev_frame.joint_q))/(next_frame.timestamp - prev_frame.timestamp)
+            frame.joint_dq = joint_dq_np.tolist()
 
-    def update_joint_tau(self, arm: sdk.ArmInterface, padding: int=1):
+    def update_joint_tau(self, padding: int=1):
         """Calculate average torque in [k-padding, k+padding] for each joint and update in self.frames[k].joint_tau"""
         for k, frame in enumerate(self.frames):
             if k < padding or k >= len(self.frames) - padding:
@@ -298,9 +339,75 @@ class Trajectory:
             prev_frame = self.frames[k-padding]
             next_frame = self.frames[k+padding]
             joint_ddq = (np.array(next_frame.joint_dq) - np.array(prev_frame.joint_dq))/(next_frame.timestamp - prev_frame.timestamp)
+
+            # For z1 arm inverse dynamics
+            arm = sdk.ArmInterface(hasGripper=True)
             frame.joint_tau = arm._ctrlComp.armModel.inverseDynamics(
                 np.array(frame.joint_q),
                 np.array(frame.joint_dq),
                 joint_ddq,
                 np.zeros(6, dtype=np.float64)
             ).tolist()
+
+    def rescale_speed(self, new_scale: float, update_joint_dq: bool=True, update_joint_tau: bool=True):
+        """Rescale the speed of the trajectory by a factor of `new_scale`"""
+        for frame in self.frames:
+            frame.timestamp = frame.timestamp / new_scale
+        if update_joint_dq:
+            self.update_joint_dq()
+        if update_joint_tau:
+            assert update_joint_dq, "update_joint_tau requires update_joint_dq to be True"
+            self.update_joint_tau()
+
+    def time_shift(self, time_offset: float, inplace: bool=True):
+        """Shift the time of the trajectory by `time_offset`"""
+        if inplace:
+            for frame in self.frames:
+                frame.timestamp += time_offset
+            return self
+        else:
+            new_traj = Trajectory()
+            for frame in self.frames:
+                new_traj.frames.append(frame + Frame(time_offset))
+            return new_traj
+
+    def truncate(self, end_time: float, inplace: bool=True):
+        """Truncate the current trajectory to the input end_time"""
+        if inplace:
+            for k, frame in enumerate(self.frames):
+                if frame.timestamp > end_time:
+                    self.frames = self.frames[:k]
+                    return self
+        else:
+            new_traj = Trajectory()
+            for frame in self.frames:
+                if frame.timestamp > end_time:
+                    break
+                new_traj.frames.append(frame)
+            return  new_traj
+        
+    def calc_delay(
+            self, 
+            new_traj: "Trajectory", 
+            time_precision: float = 0.002, 
+            offset_min: float = -0.1,
+            offset_max: float = 0.1,
+            attr_name:str="joint_q"
+        ):
+        """Calculate the delay off the new_traj with respect to the current trajectory. 
+        Will find the time offset that minimizes the difference of `attr_name` of the two trajectories."""
+        self.init_interp_function()
+        time_offsets = np.arange(offset_min, offset_max, time_precision)
+        diffs = np.zeros_like(time_offsets)
+        for k, time_offset in enumerate(tqdm(time_offsets)):
+            new_traj_with_offset = new_traj.time_shift(time_offset, inplace=False)
+            new_timestamps = [frame.timestamp for frame in new_traj_with_offset.frames]
+            interp_start_time = time.monotonic()
+            interp_traj = self.interp_traj(new_timestamps, attr_names=[attr_name])
+            interp_end_time = time.monotonic()
+            diff_sum = np.sum(np.array(interp_traj.calc_difference_norm(new_traj_with_offset, attr_name)))
+            # print(f"Interp time {interp_end_time - interp_start_time:.5f}s; Calc diff time {time.monotonic() - interp_end_time:.5f}s")
+            diffs[k] = diff_sum
+            # print(f"Time offset {time_offset:.5f}s, diff {diff_sum:.5f}")
+
+        return time_offsets[np.argmin(diffs)]
