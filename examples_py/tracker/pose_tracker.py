@@ -289,6 +289,7 @@ class PoseTracker:
                         np.zeros(6, dtype=np.float64),
                     )
                 self.arm.loopOff()
+                self.tracked_traj.update_np_arrays()
                 return True
             loop_start_time = time.monotonic()
             target_frame = trajectory.interp_single_frame(
@@ -306,7 +307,7 @@ class PoseTracker:
 
             self.arm.setArmCmd(
                 np.array(target_frame.joint_q),
-                np.array(target_frame.joint_dq)*0.1,
+                np.array(target_frame.joint_dq) * 0.1,
                 joint_tau,
             )
             self.arm.setGripperCmd(target_frame.gripper_q[0], 0.0, 0.0)
@@ -335,21 +336,23 @@ sendrecv: {sendrecv_end_time - set_gripper_cmd_end_time:.5f}, \
 sleep: {sleep_end_time - sendrecv_end_time:.5f}",
                 end="\r",
             )
-    
+
     def compare_traj(
-        self, 
-        reference_traj: Trajectory, 
-        tracked_traj: Trajectory, 
+        self,
+        reference_traj: Trajectory,
+        tracked_traj: Trajectory,
         start_time: Optional[float] = None,
         end_time: Optional[float] = None,
         fig: Optional[Figure] = None,
     ):
         """
-        Draw 3*3 subplots. 
+        Draw 3*3 subplots.
         Three lines in each subplot: reference, tracked, difference.
         Three columns in each subplot: joint_q, joint_dq, joint_tau.
         """
-        reference_traj = reference_traj.interp_traj([frame.timestamp for frame in tracked_traj.frames])
+        reference_traj = reference_traj.interp_traj(
+            [frame.timestamp for frame in tracked_traj.frames]
+        )
         diff_traj = reference_traj.calc_difference(tracked_traj)
         if fig is None:
             fig = plt.figure()
@@ -374,4 +377,3 @@ sleep: {sleep_end_time - sendrecv_end_time:.5f}",
                 )
                 axes[i][j].set_xlim(start_time, end_time)
         return diff_traj, fig
-    
