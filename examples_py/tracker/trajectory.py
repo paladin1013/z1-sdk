@@ -67,6 +67,7 @@ class Trajectory:
     def __init__(
         self, frames: Optional[List[Frame]] = None, file_name: Optional[str] = None
     ):
+        
         if frames is None:
             if file_name is None:
                 self.frames: List[Frame] = []
@@ -94,14 +95,19 @@ class Trajectory:
     def update_frames(self):
         """Synchronize the frames with the current numpy arrays"""
         # Match the length of frames and timestamps:
-        if len(self.frames) != len(self.np_arrays["timestamps"]):
+        if len(self.frames) > len(self.np_arrays["timestamps"]):
             self.frames = self.frames[:len(self.np_arrays["timestamps"])]
+        elif len(self.frames) < len(self.np_arrays["timestamps"]):
+            for k in range(len(self.np_arrays["timestamps"]) - len(self.frames)):
+                self.frames.append(Frame(0))
+
 
         for k, frame in enumerate(self.frames):
             frame.timestamp = self.np_arrays["timestamps"][k]
             for attr_name in Frame.LIST_ATTRS:
-                array:npt.NDArray = self.np_arrays[attr_name][k]
-                setattr(frame, attr_name, array.tolist())
+                if attr_name in self.np_arrays and self.np_arrays[attr_name].shape[0] > k:
+                    array:npt.NDArray = self.np_arrays[attr_name][k]
+                    setattr(frame, attr_name, array.tolist())
 
     def save_frames(self, file_name: str):
         with open(file_name, "w") as f:
@@ -112,47 +118,29 @@ class Trajectory:
 
         return any([any(getattr(frame, attr_name)) for frame in self.frames])
 
-    def interp_traj(self, new_timestamps: List[float], attr_names: List[str] = Frame.LIST_ATTRS):
+    def interp_traj(self, new_timestamps: List[float], attr_names: List[str] = Frame.LIST_ATTRS, update_frames: bool = True):
         """This method will interpolate a new trajectory, using the postures and the joint states from
-        the reference trajectory, and query at the input timestamps."""
+        the reference trajectory, and query at the input timestamps.
+        To accelarate, set update_frames to False"""
 
-        ref_timestamps = [frame.timestamp for frame in self.frames]
         if not self.interp_functions:
             self.init_interp_function()
+            print("Interpolation functions initialized")
 
-        # def interpnd(
-        #     x: List[float], y: List[List[float]], x_new: List[float]
-        # ) -> List[List[float]]:
-        #     assert all(
-        #         [len(_) == len(y[0]) for _ in y]
-        #     ), "The input data of y should have the same dimension."
-        #     raw_results: List[List[float]] = []
-        #     dim = len(y[0])
-        #     for k in range(dim):
-        #         y_k = [_[k] for _ in y]
-        #         f_k = interp1d(x, y_k, bounds_error=False, fill_value="extrapolate", assume_sorted=True)
-        #         raw_results.append(f_k(x_new))
-
-        #     results = [
-        #         [raw_results[i][j] for i in range(dim)] for j in range(len(x_new))
-        #     ]
-        #     return results
-
-        new_traj = Trajectory([Frame(timestamp) for timestamp in new_timestamps])
-
+        # Create a new trajectory
+        new_traj = Trajectory()
+        new_traj.np_arrays["timestamps"] = np.array(new_timestamps)
         # Interpolate all attributes
         for attr_name in attr_names:
-            ref_val = [getattr(frame, attr_name) for frame in self.frames]
-            dim = len(ref_val[0])
-            interp_val = []
+            # ref_val = [getattr(frame, attr_name) for frame in self.frames]
+            ref_val = self.np_arrays[attr_name]
+            dim = ref_val.shape[1]
+            interp_val = np.zeros((len(new_timestamps), dim), dtype=np.float64)
             for k in range(dim):
-                interp_val.append(self.interp_functions[attr_name][k](new_timestamps))
-            interp_val_reshaped = [
-                [interp_val[i][j] for i in range(dim)] for j in range(len(new_timestamps))
-            ]
-            for k in range(len(new_timestamps)):
-                setattr(new_traj.frames[k], attr_name, interp_val_reshaped[k])
-
+                interp_val[:, k] = self.interp_functions[attr_name][k](new_timestamps)
+            new_traj.np_arrays[attr_name] = interp_val.copy()
+        if update_frames:
+            new_traj.update_frames()
         return new_traj
 
     def init_interp_function(self):
@@ -246,13 +234,12 @@ class Trajectory:
         return diff_traj
 
     def calc_difference_norm(
-        self, new_traj: "Trajectory", attr_name: str, specify_axis: Optional[int] = None
-    ):
+        self, new_traj: "Trajectory", attr_name: str
+    ) -> npt.NDArray[np.float64]:
         """
         Calculate the difference of `attr_name` between two trajectories.
 
         `attr_name` should be one of "joint_q", "joint_dq", "joint_tau", "ee_posture", "gripper_q", "gripper_dq", "gripper_tau".
-        If `specify_axis` is not set, this method will take the norm of the difference of all axes.
         Otherwise it will only return the specified single axis (`new_traj - self`).
 
         When applying this method, please make sure new_traj has the same timestamps as the current one.
@@ -260,21 +247,9 @@ class Trajectory:
         """
         assert attr_name in Frame.LIST_ATTRS
 
-        if specify_axis is not None:
-            assert (
-                type(specify_axis) == int
-            ), f"`specify_axis` should be an integer from 0 to {len(getattr(self.frames[0], attr_name))}"
-            results: List[float] = [
-                getattr(new_traj.frames[k], attr_name)[specify_axis]
-                - getattr(frame, attr_name)[specify_axis]
-                for k, frame in enumerate(self.frames)
-            ]
-        else:
-            results: List[float] = []
-            for k, frame in enumerate(self.frames):
-                new_val = np.array(getattr(new_traj.frames[k], attr_name))
-                self_val = np.array(getattr(frame, attr_name))
-                results.append(float(np.linalg.norm(new_val - self_val)))
+        assert all(self.np_arrays['timestamps'] == new_traj.np_arrays['timestamps']), \
+            "The two trajectories should have the same timestamps"
+        results = np.linalg.norm(new_traj.np_arrays[attr_name] - self.np_arrays[attr_name], axis=1)
 
         return results
     
@@ -358,17 +333,21 @@ class Trajectory:
         if update_joint_tau:
             assert update_joint_dq, "update_joint_tau requires update_joint_dq to be True"
             self.update_joint_tau()
+        self.update_np_arrays()
 
-    def time_shift(self, time_offset: float, inplace: bool=True):
-        """Shift the time of the trajectory by `time_offset`"""
+    def time_shift(self, time_offset: float, inplace: bool=True, update_frames = True):
+        """Shift the time of the trajectory by `time_offset`. To speedup, set update_frames to False"""
         if inplace:
-            for frame in self.frames:
-                frame.timestamp += time_offset
+            self.np_arrays["timestamps"] += time_offset
+            if update_frames:
+                self.update_frames()
             return self
         else:
             new_traj = Trajectory()
-            for frame in self.frames:
-                new_traj.frames.append(frame + Frame(time_offset))
+            new_traj.np_arrays = self.np_arrays.copy()
+            new_traj.np_arrays["timestamps"] = self.np_arrays["timestamps"] + time_offset
+            if update_frames:
+                new_traj.update_frames()
             return new_traj
 
     def truncate(self, end_time: float, inplace: bool=True):
@@ -377,6 +356,7 @@ class Trajectory:
             for k, frame in enumerate(self.frames):
                 if frame.timestamp > end_time:
                     self.frames = self.frames[:k]
+                    self.update_np_arrays()
                     return self
         else:
             new_traj = Trajectory()
@@ -384,29 +364,28 @@ class Trajectory:
                 if frame.timestamp > end_time:
                     break
                 new_traj.frames.append(frame)
-            return  new_traj
+            new_traj.update_np_arrays()
+            return new_traj
         
     def calc_delay(
             self, 
             new_traj: "Trajectory", 
             time_precision: float = 0.002, 
-            offset_min: float = -0.1,
-            offset_max: float = 0.1,
+            delay_min: float = -0.1,
+            delay_max: float = 0.1,
             attr_name:str="joint_q"
         ):
         """Calculate the delay off the new_traj with respect to the current trajectory. 
         Will find the time offset that minimizes the difference of `attr_name` of the two trajectories."""
         self.init_interp_function()
-        time_offsets = np.arange(offset_min, offset_max, time_precision)
+        time_offsets = np.arange(delay_min, delay_max, time_precision)
         diffs = np.zeros_like(time_offsets)
-        for k, time_offset in enumerate(tqdm(time_offsets)):
-            new_traj_with_offset = new_traj.time_shift(time_offset, inplace=False)
-            new_timestamps = [frame.timestamp for frame in new_traj_with_offset.frames]
-            interp_start_time = time.monotonic()
-            interp_traj = self.interp_traj(new_timestamps, attr_names=[attr_name])
-            interp_end_time = time.monotonic()
-            diff_sum = np.sum(np.array(interp_traj.calc_difference_norm(new_traj_with_offset, attr_name)))
-            # print(f"Interp time {interp_end_time - interp_start_time:.5f}s; Calc diff time {time.monotonic() - interp_end_time:.5f}s")
+        for k, time_offset in enumerate(time_offsets):
+            # New trajectory should be shifted to the left if offset > 0
+            new_traj_with_offset = new_traj.time_shift(-time_offset, inplace=False, update_frames=False)
+            new_timestamps = new_traj_with_offset.np_arrays["timestamps"].tolist()
+            interp_traj = self.interp_traj(new_timestamps, attr_names=[attr_name], update_frames=False)
+            diff_sum = np.sum(interp_traj.calc_difference_norm(new_traj_with_offset, attr_name))
             diffs[k] = diff_sum
             # print(f"Time offset {time_offset:.5f}s, diff {diff_sum:.5f}")
 
