@@ -573,7 +573,7 @@ class Trajectory:
     def calc_delay(
         self,
         new_traj: "Trajectory",
-        time_precision: float = 0.002,
+        time_precision: float = 0.001,
         delay_min: float = -0.1,
         delay_max: float = 0.1,
         attr_name: str = "joint_q",

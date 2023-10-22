@@ -7,7 +7,7 @@ import matplotlib.pyplot as plt
 if __name__ == "__main__":
     duration = 10
     track_dt = 0.002
-    trial = 4
+    trial = 5
     replay_speed = 0.2
     truncate_time = 10
 
@@ -15,8 +15,12 @@ if __name__ == "__main__":
 
     os.makedirs(data_dir, exist_ok=True)
 
-    # pt.start_teleop_tracking(duration)
-    # pt.tracked_traj.save_frames(f"{data_dir}/tracked.json")
+    arm = sdk.ArmInterface(hasGripper=True)
+
+    pt = PoseTracker(arm, teleop_dt=0.02, track_dt=track_dt, stiffness=1)
+
+    pt.start_teleop_tracking(duration)
+    pt.tracked_traj.save_frames(f"{data_dir}/tracked.json")
 
     ## Update reference trajectory
     teleop_traj = Trajectory(
@@ -24,10 +28,10 @@ if __name__ == "__main__":
     )  # Load tracked trajectory as reference
     teleop_traj.plot_attr("joint_dq", title="teleop trajectory")
 
-    for replay_speed in [0.1, 0.2, 0.3, 0.5, 0.7, 1.0]:
+    for replay_speed in np.arange(0.1, 1.1, 0.1):
         arm = sdk.ArmInterface(hasGripper=True)
-        pt = PoseTracker(arm, teleop_dt=0.02, track_dt=track_dt, stiffness=1)
-        # Warning!!! For some reason, the final state in the trajectory of low level command is keeped in the sdk object
+        pt.arm = arm
+        # Warning!!! For some reasons, the final state in the trajectory of low level command is keeped in the sdk object
         # If one have used the low level command and then call arm.backToStart(), even if the arm is reset to the home position,
         # the last state in the low level command trajectory will be kept and the arm will move to that state immediately
         # once arm.setFsm(sdk.ArmFSMState.LOWCMD) or arm.setFsmLowCmd() is called.
@@ -35,11 +39,9 @@ if __name__ == "__main__":
         # TODO: find out some other ways to fix this problem
 
         reference_file = (
-            f"{data_dir}/speed{replay_speed}_truncate{truncate_time}_reference.json"
+            f"{data_dir}/speed{replay_speed:.1f}_truncate{truncate_time}_reference.json"
         )
-        replay_file = (
-            f"{data_dir}/speed{replay_speed}_truncate{truncate_time}_replay_lowcmd.json"
-        )
+        replay_file = f"{data_dir}/speed{replay_speed:.1f}_truncate{truncate_time}_replay_lowcmd.json"
         reference_traj = teleop_traj.copy()
         reference_traj.rescale_speed(replay_speed)
         print("finish rescaling speed")
@@ -51,13 +53,14 @@ if __name__ == "__main__":
         pt.replay_traj(reference_traj, ctrl_method=sdk.ArmFSMState.LOWCMD)
         pt.tracked_traj.save_frames(replay_file)
 
-    # plt.show()
-    # ## Start replaying
-    # pt.track_dt = 0.002
-    # pt.stiffness = 1
+    for replay_speed in np.arange(0.1, 1.1, 0.1):
+        reference_file = (
+            f"{data_dir}/speed{replay_speed:.1f}_truncate{truncate_time}_reference.json"
+        )
+        replay_file = f"{data_dir}/speed{replay_speed:.1f}_truncate{truncate_time}_replay_lowcmd.json"
+        reference_traj = Trajectory(file_name=reference_file)
+        replay_traj = Trajectory(file_name=replay_file)
 
-    # replay_traj = Trajectory(file_name=replay_file)
-    # replay_traj.plot_attr("joint_dq", title="replayed trajectory")
-    # print(reference_traj.calc_delay(replay_traj, delay_min=0, delay_max=0.1, time_precision=0.001))
-    # pt.compare_traj(reference_traj, replay_traj)
-    # plt.show()
+        print(
+            f"Speed: {replay_speed:.1f} delay: {reference_traj.calc_delay(replay_traj)}"
+        )
