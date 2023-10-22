@@ -127,6 +127,7 @@ class PoseTracker:
                         time.sleep(remaining_time)
 
         print("Teleoperation completed!")
+        self.tracked_traj.update_np_arrays()
 
         if back_to_start:
             self.arm.backToStart()
@@ -161,7 +162,11 @@ class PoseTracker:
         self.arm.loopOff()
 
     def init_arm(
-        self, init_frame: Frame, ctrl_method: sdk.ArmFSMState, init_timeout: float = 5
+        self,
+        init_frame: Frame,
+        ctrl_method: sdk.ArmFSMState,
+        init_timeout: float = 5,
+        debug=False,
     ):
         assert ctrl_method in [
             sdk.ArmFSMState.JOINTCTRL,
@@ -175,6 +180,10 @@ class PoseTracker:
             np.zeros(6, dtype=np.float64),
             np.zeros(6, dtype=np.float64),
         )
+
+        if debug:
+            self.arm.setFsmLowcmd()
+            return True
         if ctrl_method == sdk.ArmFSMState.JOINTCTRL:
             self.arm.startTrack(sdk.ArmFSMState.JOINTCTRL)
         elif ctrl_method == sdk.ArmFSMState.LOWCMD:
@@ -192,17 +201,19 @@ class PoseTracker:
             # Initialize arm position
             self.arm.setArmCmd(
                 np.array(init_frame.joint_q),
-                np.array(init_frame.joint_dq),
+                # np.array(init_frame.joint_dq),
+                np.zeros(6, dtype=np.float64),  # Initialize at zero velocity
                 np.zeros(6, dtype=np.float64),
             )
             self.arm.setGripperCmd(
                 init_frame.gripper_q[0],
                 init_frame.gripper_dq[0],
+                # 0.0,
                 0.0,
             )
             if ctrl_method == sdk.ArmFSMState.LOWCMD:
                 self.arm.sendRecv()
-
+            print(f"Start sleeping: {self.arm_ctrl_dt}")
             time.sleep(self.arm_ctrl_dt)
             if (
                 np.linalg.norm(
@@ -307,7 +318,7 @@ class PoseTracker:
 
             self.arm.setArmCmd(
                 np.array(target_frame.joint_q),
-                np.array(target_frame.joint_dq) * 0.1,
+                np.array(target_frame.joint_dq),
                 joint_tau,
             )
             self.arm.setGripperCmd(target_frame.gripper_q[0], 0.0, 0.0)

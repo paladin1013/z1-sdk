@@ -5,23 +5,15 @@ import os
 import matplotlib.pyplot as plt
 
 if __name__ == "__main__":
-    arm = sdk.ArmInterface(hasGripper=True)
-    arm.setArmCmd(
-        np.zeros(6, dtype=np.float64),
-        np.zeros(6, dtype=np.float64),
-        np.zeros(6, dtype=np.float64),
-    )
-
     duration = 10
     track_dt = 0.002
-    trial = 2
+    trial = 4
     replay_speed = 0.2
     truncate_time = 10
 
     data_dir = f"logs/trajectories/duration{duration}_dt{track_dt}_trial{trial}"
 
     os.makedirs(data_dir, exist_ok=True)
-    pt = PoseTracker(arm, teleop_dt=0.02, track_dt=track_dt, stiffness=1)
 
     # pt.start_teleop_tracking(duration)
     # pt.tracked_traj.save_frames(f"{data_dir}/tracked.json")
@@ -32,7 +24,16 @@ if __name__ == "__main__":
     )  # Load tracked trajectory as reference
     teleop_traj.plot_attr("joint_dq", title="teleop trajectory")
 
-    for replay_speed in [0.1, 0.2, 0.3, 0.5, 0.7, 1]:
+    for replay_speed in [0.1, 0.2, 0.3, 0.5, 0.7, 1.0]:
+        arm = sdk.ArmInterface(hasGripper=True)
+        pt = PoseTracker(arm, teleop_dt=0.02, track_dt=track_dt, stiffness=1)
+        # Warning!!! For some reason, the final state in the trajectory of low level command is keeped in the sdk object
+        # If one have used the low level command and then call arm.backToStart(), even if the arm is reset to the home position,
+        # the last state in the low level command trajectory will be kept and the arm will move to that state immediately
+        # once arm.setFsm(sdk.ArmFSMState.LOWCMD) or arm.setFsmLowCmd() is called.
+        # To avoid this, please instantiate a new sdk interface object every time before running in low level command.
+        # TODO: find out some other ways to fix this problem
+
         reference_file = (
             f"{data_dir}/speed{replay_speed}_truncate{truncate_time}_reference.json"
         )
@@ -41,11 +42,16 @@ if __name__ == "__main__":
         )
         reference_traj = teleop_traj.copy()
         reference_traj.rescale_speed(replay_speed)
+        print("finish rescaling speed")
         reference_traj.truncate(truncate_time)
+        reference_traj.plot_attr("joint_q", title=f"replay speed {replay_speed}")
+        reference_traj.plot_attr("joint_dq", title=f"replay speed {replay_speed}")
         reference_traj.save_frames(reference_file)
+        print("finish saving reference trajectory")
         pt.replay_traj(reference_traj, ctrl_method=sdk.ArmFSMState.LOWCMD)
         pt.tracked_traj.save_frames(replay_file)
 
+    # plt.show()
     # ## Start replaying
     # pt.track_dt = 0.002
     # pt.stiffness = 1

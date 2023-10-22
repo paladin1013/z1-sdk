@@ -11,6 +11,7 @@ from scipy.signal import convolve2d
 import unitree_arm_interface as sdk
 from tqdm import tqdm
 import time
+from sklearn.linear_model import LinearRegression
 
 
 @dataclass
@@ -111,6 +112,19 @@ class Trajectory:
         self.update_frames()
         return new_traj
 
+    def __getitem__(self, idx: int):
+        if idx == -1:
+            idx = self.np_arrays["timestamps"].shape[0] - 1
+        if idx < 0 or idx >= self.np_arrays["timestamps"].shape[0]:
+            raise ValueError(
+                f"{idx} out of range. maximum: {self.np_arrays['timestamps'].shape[0]-1}"
+            )
+        attr_dict = {}
+        for attr_name in Frame.LIST_ATTRS:
+            attr_dict[attr_name] = self.np_arrays[attr_name][idx]
+        frame = Frame(self.np_arrays["timestamps"][idx], **attr_dict)
+        return frame
+
     def update_np_arrays(self):
         """Synchronize the numpy arrays with the current frames"""
         self.np_arrays["timestamps"] = np.array(
@@ -181,7 +195,6 @@ class Trajectory:
         new_traj.np_arrays["timestamps"] = np.array(new_timestamps)
         # Interpolate all attributes
         for attr_name in attr_names:
-            # ref_val = [getattr(frame, attr_name) for frame in self.frames]
             ref_val = self.np_arrays[attr_name]
             dim = ref_val.shape[1]
             interp_val = np.zeros((len(new_timestamps), dim), dtype=np.float64)
@@ -193,18 +206,22 @@ class Trajectory:
         return new_traj
 
     def init_interp_function(self):
-        assert self.frames, "self.frames is empty! Please initialize the trajectory."
-        timestamps = [frame.timestamp for frame in self.frames]
+        assert (
+            "timestamps" in self.np_arrays and self.np_arrays["timestamps"].shape
+        ), "self.np_arrays['timestamps'] is empty! Please initialize the trajectory."
+        timestamps = self.np_arrays["timestamps"].copy()
         for attr_name in Frame.LIST_ATTRS:
-            dim = len(getattr(self.frames[0], attr_name))
+            dim = self.np_arrays[attr_name].shape[1]
             self.interp_functions[attr_name] = []
             for k in range(dim):
-                vals = [getattr(frame, attr_name)[k] for frame in self.frames]
+                vals = self.np_arrays[attr_name][:, k].squeeze()
+                fill_value = "extrapolate"
+                fill_value = cast(float, fill_value)  # To make mypy happy
                 f_k = interp1d(
                     timestamps,
                     vals,
                     bounds_error=False,
-                    fill_value="extrapolate",
+                    fill_value=fill_value,
                     assume_sorted=True,
                 )
                 self.interp_functions[attr_name].append(f_k)
@@ -217,38 +234,41 @@ class Trajectory:
         interp_attrs: List[str] = list(Frame.LIST_ATTRS.keys()),
     ):
         """next_frame_idx is the frame number that is the first to have a larger timestamp than new_timestamp.
-        Will return the self.frames[0] if next_frame_idx = 0
-        Will return the self.frames[-1] if next_frame_idx >= len(self.frames)"""
+        Will return the self.np_arrays["timestamps"][0] if next_frame_idx = 0
+        Will return the self.np_arrays["timestamps"][-1] if next_frame_idx >= len(self.np_arrays["timestamps"])
+        """
 
         if next_frame_idx is None:
-            for k, frame in enumerate(self.frames):
-                if frame.timestamp > new_timestamp:
-                    next_frame_idx = k
-                    break
-            else:
-                next_frame_idx = len(self.frames)
+            next_frame_idx = np.searchsorted(
+                self.np_arrays["timestamps"], new_timestamp
+            ).item()
 
         if next_frame_idx == 0:
-            return self.frames[0]
-        elif next_frame_idx >= len(self.frames):
-            return self.frames[-1]
+            return self[0]
+        elif next_frame_idx >= len(self.np_arrays["timestamps"]):
+            return self[-1]
         else:
             assert (
-                self.frames[next_frame_idx - 1].timestamp
+                self.np_arrays["timestamps"][next_frame_idx - 1]
                 <= new_timestamp
-                <= self.frames[next_frame_idx].timestamp
+                <= self.np_arrays["timestamps"][next_frame_idx]
             ), "Wrong next_frame_idx"
 
             if method == "linear":
                 prev_ratio = (
-                    new_timestamp - self.frames[next_frame_idx - 1].timestamp
+                    new_timestamp - self.np_arrays["timestamps"][next_frame_idx - 1]
                 ) / (
-                    self.frames[next_frame_idx].timestamp
-                    - self.frames[next_frame_idx - 1].timestamp
+                    self.np_arrays["timestamps"][next_frame_idx]
+                    - self.np_arrays["timestamps"][next_frame_idx - 1]
                 )
-                new_frame = self.frames[next_frame_idx - 1] * prev_ratio + self.frames[
-                    next_frame_idx
-                ] * (1 - prev_ratio)
+                new_frame_dict: Dict[str, List[float]] = {}
+                for attr_name in interp_attrs:
+                    prev_val = self.np_arrays[attr_name][next_frame_idx - 1]
+                    next_val = self.np_arrays[attr_name][next_frame_idx]
+                    new_frame_dict[attr_name] = (
+                        prev_val * prev_ratio + next_val * (1 - prev_ratio)
+                    ).tolist()
+                new_frame = Frame(new_timestamp, **new_frame_dict)
 
             elif method == "scipy":
                 raise NotImplementedError(
@@ -277,21 +297,25 @@ class Trajectory:
 
             return new_frame
 
-    def calc_difference(self, new_traj: "Trajectory"):
+    def calc_difference(self, new_traj: "Trajectory", update_frames=True):
         """
         Calculate the difference of all attributes between two trajectories.
         When applying this method, please make sure new_traj has the same timestamps as the current one.
         """
-        assert len(self.frames) == len(
-            new_traj.frames
+        assert len(self.np_arrays["timestamps"]) == len(
+            new_traj.np_arrays["timestamps"]
         ), "The two trajectories should have the same length"
         diff_traj = Trajectory()
-        for k in range(len(self.frames)):
-            assert (
-                self.frames[k].timestamp == new_traj.frames[k].timestamp
-            ), "The two trajectories should have the same timestamps"
-            diff_traj.frames.append(self.frames[k] * (-1) + new_traj.frames[k])
-            diff_traj.frames[-1].timestamp = self.frames[k].timestamp
+        assert np.all(
+            self.np_arrays["timestamps"] == new_traj.np_arrays["timestamps"]
+        ), "The two trajectories should have the same timestamps"
+        diff_traj.np_arrays["timestamps"] = self.np_arrays["timestamps"].copy()
+        for attr_name in Frame.LIST_ATTRS:
+            diff_traj.np_arrays[attr_name] = (
+                new_traj.np_arrays[attr_name] - self.np_arrays[attr_name]
+            )
+        if update_frames:
+            diff_traj.update_frames()
         return diff_traj
 
     def calc_difference_norm(
@@ -321,7 +345,7 @@ class Trajectory:
         """Calculate noise of the trajectory through calculate average variance in a neighborhood around each element."""
         avg_var = Frame(0)
         for attr_name in Frame.LIST_ATTRS:
-            val_matrix = np.array([getattr(frame, attr_name) for frame in self.frames])
+            val_matrix = self.np_arrays[attr_name]
             var_matrix = np.zeros_like(val_matrix, dtype=np.float64)
             for k in range(var_matrix.shape[0]):
                 # Calculate the variance between [k-padding, k+padding] in each column
@@ -335,31 +359,34 @@ class Trajectory:
 
         return avg_var
 
-    def get_moving_average(self, padding: int = 5):
+    def get_moving_average(self, padding: int = 5, update_frames=True):
         """Apply np.convolve to smoothen the trajectory"""
-        new_frames = [Frame(frame.timestamp) for frame in self.frames]
+        new_traj = Trajectory()
+        new_traj.np_arrays["timestamps"] = self.np_arrays["timestamps"].copy()
         for attr_name in Frame.LIST_ATTRS:
-            val_matrix = np.array([getattr(frame, attr_name) for frame in self.frames])
+            val_matrix = self.np_arrays[attr_name]
             # Apply padding
             padding_up = np.ones((padding, 1)) @ val_matrix[0].reshape((1, -1))
             padding_down = np.ones((padding, 1)) @ val_matrix[-1].reshape((1, -1))
             val_matrix_with_padding = np.concatenate(
                 [padding_up, val_matrix, padding_down], axis=0
             )
-            filter_result = convolve2d(
+            new_traj.np_arrays[attr_name] = convolve2d(
                 val_matrix_with_padding, np.ones((padding * 2 + 1, 1)), mode="valid"
             ) / (2 * padding + 1)
-            for k, new_frame in enumerate(new_frames):
-                setattr(new_frame, attr_name, filter_result[k].tolist())
-        return Trajectory(new_frames)
+
+        if update_frames:
+            new_traj.update_frames()
+
+        return new_traj
 
     def plot_attr(
         self, attr_name, ax: Optional[Axes] = None, title: Optional[str] = None
     ):
         assert attr_name in Frame.LIST_ATTRS
-        timestamps = [frame.timestamp for frame in self.frames]
-        vals = [getattr(frame, attr_name) for frame in self.frames]
-        dim = len(vals[0])
+        timestamps = self.np_arrays["timestamps"].copy()
+        vals = self.np_arrays[attr_name]
+        dim = vals.shape[1]
         if ax is None:
             fig = plt.figure()
             ax = plt.axes()
@@ -371,37 +398,91 @@ class Trajectory:
         ax.set_xlabel("Time (s)")
         ax.set_title(f"{title}")
 
-    def update_joint_dq(self, padding: int = 5, update_frames=True):
-        """Calculate average speed in [k-padding, k+padding] for each joint and update in self.frames[k].joint_dq"""
+    def update_joint_dq(
+        self, window_width: float = 0.1, method: str = "linfit", update_frames=True
+    ):
+        """Calculate average speed in [timestamp-window_width/2, timestamp+window_width/2] for each joint and update in self.np_arrays["joint_dq"]"""
+
+        assert method in ["linfit", "diff"]
+
         for k in range(self.np_arrays["timestamps"].shape[0]):
-            if k < padding or k >= self.np_arrays["timestamps"].shape[0] - padding:
-                continue
-            self.np_arrays["joint_dq"][k] = (
-                self.np_arrays["joint_q"][k + padding]
-                - self.np_arrays["joint_q"][k - padding]
-            ) / (
-                self.np_arrays["timestamps"][k + padding]
-                - self.np_arrays["timestamps"][k - padding]
-            )
+            frame_nums = np.argwhere(
+                np.logical_and(
+                    self.np_arrays["timestamps"]
+                    >= self.np_arrays["timestamps"][k] - window_width / 2,
+                    self.np_arrays["timestamps"]
+                    <= self.np_arrays["timestamps"][k] + window_width / 2,
+                )
+            ).squeeze()
+            assert frame_nums.shape[0] > 0, "No frame found in the neighborhood"
+            start_frame = min(frame_nums)
+            end_frame = max(frame_nums)
+
+            if method == "diff":
+                self.np_arrays["joint_dq"][k] = (
+                    self.np_arrays["joint_q"][start_frame]
+                    - self.np_arrays["joint_q"][end_frame]
+                ) / (
+                    self.np_arrays["timestamps"][start_frame]
+                    - self.np_arrays["timestamps"][end_frame]
+                )
+            elif method == "linfit":
+                # Use linear fit between [start_frame, end_frame] to calculate the speed
+                reg = LinearRegression().fit(
+                    self.np_arrays["timestamps"][
+                        start_frame : end_frame + 1, np.newaxis
+                    ],
+                    self.np_arrays["joint_q"][start_frame : end_frame + 1],
+                )
+                self.np_arrays["joint_dq"][k] = reg.coef_.squeeze()
 
         if update_frames:
             self.update_frames()
 
-    def update_joint_tau(self, padding: int = 1, update_frames=True):
-        """Calculate average torque in [k-padding, k+padding] for each joint and update in self.frames[k].joint_tau"""
+    def smoothen_joint_dq_start(
+        self, window_width: float = 0.5, method: str = "linear"
+    ):
+        """Smoothen the joint_dq at the start of the trajectory (first window_width seconds)
+        by applying a filter function directly to the first few frames.,
+        so that the speed is continuous at the start"""
+        frame_nums = np.searchsorted(self.np_arrays["timestamps"], window_width)
+        assert frame_nums > 0, "No frame found in the first window_width seconds"
+        if method == "linear":
+            coeff = self.np_arrays["timestamps"][:frame_nums] / window_width
+            self.np_arrays["joint_dq"][:frame_nums] = (
+                self.np_arrays["joint_dq"][:frame_nums] * coeff[:, np.newaxis]
+            )
+        elif method == "quadratic":
+            coeff = (self.np_arrays["timestamps"][:frame_nums] / window_width) ** 2
+            self.np_arrays["joint_dq"][:frame_nums] = (
+                self.np_arrays["joint_dq"][:frame_nums] * coeff[:, np.newaxis]
+            )
+
+    def update_joint_tau(self, window_width: float = 0.1, update_frames=True):
+        """Calculate average torque in [timestamp-window_width/2, timestamp+window_width/2]
+        for each joint and update in self.np_arrays["joint_tau"]"""
 
         arm = sdk.ArmInterface(hasGripper=True)
 
         for k in range(self.np_arrays["timestamps"].shape[0]):
-            if k < padding or k >= self.np_arrays["timestamps"].shape[0] - padding:
-                continue
+            frame_nums = np.argwhere(
+                np.logical_and(
+                    self.np_arrays["timestamps"]
+                    >= self.np_arrays["timestamps"][k] - window_width / 2,
+                    self.np_arrays["timestamps"]
+                    <= self.np_arrays["timestamps"][k] + window_width / 2,
+                )
+            ).squeeze()
+            assert frame_nums.shape[0] > 0, "No frame found in the neighborhood"
+            start_frame = min(frame_nums)
+            end_frame = max(frame_nums)
 
             joint_ddq = (
-                self.np_arrays["joint_dq"][k + padding]
-                - self.np_arrays["joint_dq"][k - padding]
+                self.np_arrays["joint_dq"][start_frame]
+                - self.np_arrays["joint_dq"][end_frame]
             ) / (
-                self.np_arrays["timestamps"][k + padding]
-                - self.np_arrays["timestamps"][k - padding]
+                self.np_arrays["timestamps"][start_frame]
+                - self.np_arrays["timestamps"][end_frame]
             )
 
             # z1 arm inverse dynamics
@@ -427,6 +508,7 @@ class Trajectory:
         self.np_arrays["timestamps"] = self.np_arrays["timestamps"] / new_scale
         if update_joint_dq:
             self.update_joint_dq()
+            self.smoothen_joint_dq_start()
         if update_joint_tau:
             assert (
                 update_joint_dq
