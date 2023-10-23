@@ -192,8 +192,8 @@ class PoseTracker:
             kd = self.arm.lowcmd.kd
             if ctrl_method == sdk.ArmFSMState.LOWCMD:
                 assert (
-                    self.stiffness is not None and 0 < self.stiffness <= 1
-                ), "stiffness should be initialized in (0, 1]"
+                    self.stiffness is not None and 0 < self.stiffness <= 2
+                ), "stiffness should be initialized in (0, 2]"
             self.arm.lowcmd.setControlGain(self.stiffness * default_kp, kd)
         init_start_time = time.monotonic()
 
@@ -213,7 +213,6 @@ class PoseTracker:
             )
             if ctrl_method == sdk.ArmFSMState.LOWCMD:
                 self.arm.sendRecv()
-            print(f"Start sleeping: {self.arm_ctrl_dt}")
             time.sleep(self.arm_ctrl_dt)
             if (
                 np.linalg.norm(
@@ -291,6 +290,7 @@ class PoseTracker:
                     break
             else:
                 print(f"\nFinish replaying trajectory!")
+                time.sleep(0.5)
                 if back_to_start:
                     self.arm.loopOn()
                     self.arm.backToStart()
@@ -347,44 +347,3 @@ sendrecv: {sendrecv_end_time - set_gripper_cmd_end_time:.5f}, \
 sleep: {sleep_end_time - sendrecv_end_time:.5f}",
                 end="\r",
             )
-
-    def compare_traj(
-        self,
-        reference_traj: Trajectory,
-        tracked_traj: Trajectory,
-        start_time: Optional[float] = None,
-        end_time: Optional[float] = None,
-        fig: Optional[Figure] = None,
-    ):
-        """
-        Draw 3*3 subplots.
-        Three lines in each subplot: reference, tracked, difference.
-        Three columns in each subplot: joint_q, joint_dq, joint_tau.
-        """
-        reference_traj = reference_traj.interp_traj(
-            [frame.timestamp for frame in tracked_traj.frames]
-        )
-        diff_traj = reference_traj.calc_difference(tracked_traj)
-        if fig is None:
-            fig = plt.figure()
-        axes = fig.subplots(3, 3)
-        axes = cast(List[List[Axes]], axes)
-        if start_time is None:
-            start_time = 0
-        if end_time is None:
-            end_time = min(
-                reference_traj.frames[-1].timestamp,
-                tracked_traj.frames[-1].timestamp,
-            )
-        attr_names = ["joint_q", "joint_dq", "joint_tau"]
-        trajs = [reference_traj, tracked_traj, diff_traj]
-        traj_names = ["reference", "tracked", "difference"]
-        for i in range(3):
-            for j in range(3):
-                trajs[i].plot_attr(
-                    attr_names[j],
-                    ax=axes[i][j],
-                    title=f"{traj_names[i]} {attr_names[j]}",
-                )
-                axes[i][j].set_xlim(start_time, end_time)
-        return diff_traj, fig

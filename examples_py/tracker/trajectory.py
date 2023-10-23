@@ -1,7 +1,7 @@
 import numpy as np
 import numpy.typing as npt
 import json
-from typing import List, Dict, Optional, cast
+from typing import List, Dict, Optional, Tuple, cast
 from dataclasses import dataclass, asdict, field
 import matplotlib.pyplot as plt
 from matplotlib.axes import Axes
@@ -340,7 +340,7 @@ class Trajectory:
 
         return results
 
-    def measure_noise(self, padding: int = 5):
+    def calc_local_variance(self, padding: int = 5):
         """Calculate noise of the trajectory through calculate average variance in a neighborhood around each element."""
         avg_var = Frame(0)
         for attr_name in Frame.LIST_ATTRS:
@@ -357,27 +357,6 @@ class Trajectory:
             setattr(avg_var, attr_name, np.mean(var_matrix, axis=0).tolist())
 
         return avg_var
-
-    def get_moving_average(self, padding: int = 5, update_frames=True):
-        """Apply np.convolve to smoothen the trajectory"""
-        new_traj = Trajectory()
-        new_traj.np_arrays["timestamps"] = self.np_arrays["timestamps"].copy()
-        for attr_name in Frame.LIST_ATTRS:
-            val_matrix = self.np_arrays[attr_name]
-            # Apply padding
-            padding_up = np.ones((padding, 1)) @ val_matrix[0].reshape((1, -1))
-            padding_down = np.ones((padding, 1)) @ val_matrix[-1].reshape((1, -1))
-            val_matrix_with_padding = np.concatenate(
-                [padding_up, val_matrix, padding_down], axis=0
-            )
-            new_traj.np_arrays[attr_name] = convolve2d(
-                val_matrix_with_padding, np.ones((padding * 2 + 1, 1)), mode="valid"
-            ) / (2 * padding + 1)
-
-        if update_frames:
-            new_traj.update_frames()
-
-        return new_traj
 
     def plot_attr(
         self, attr_name, ax: Optional[Axes] = None, title: Optional[str] = None
@@ -438,6 +417,29 @@ class Trajectory:
         if update_frames:
             self.update_frames()
 
+    def apply_moving_average(self, attr_names: List[str], window_width: float = 0.2):
+        """Apply np.convolve to smoothen the attribute in place"""
+        for attr_name in attr_names:
+            assert attr_name in Frame.LIST_ATTRS
+
+            val_matrix = self.np_arrays[attr_name].copy()
+            # Apply padding
+            avg_period = (
+                self.np_arrays["timestamps"][-1] - self.np_arrays["timestamps"][0]
+            ) / self.np_arrays["timestamps"].shape[0]
+            padding_num = int(window_width / avg_period)
+            padding_up = np.ones((padding_num, 1)) @ val_matrix[0].reshape((1, -1))
+            padding_down = np.ones((padding_num, 1)) @ val_matrix[-1].reshape((1, -1))
+            val_matrix_with_padding = np.concatenate(
+                [padding_up, val_matrix, padding_down], axis=0
+            )
+            self.np_arrays[attr_name] = convolve2d(
+                val_matrix_with_padding, np.ones((padding_num * 2 + 1, 1)), mode="valid"
+            ) / (2 * padding_num + 1)
+            assert (
+                self.np_arrays[attr_name].shape == val_matrix.shape
+            ), "Shape mismatch after moving average"
+
     def smoothen_joint_dq_start_end(
         self, window_width: float = 0.5, method: str = "linear"
     ):
@@ -462,21 +464,28 @@ class Trajectory:
 
         # End
         final_timestamp = self.np_arrays["timestamps"][-1]
-        frame_num_end = np.searchsorted(self.np_arrays["timestamps"], final_timestamp - window_width, side="right")
-        assert self.np_arrays["timestamps"].shape[0] - frame_num_end > 0, "No frame found in the last window_width seconds"
+        frame_num_end = np.searchsorted(
+            self.np_arrays["timestamps"], final_timestamp - window_width, side="right"
+        )
+        assert (
+            self.np_arrays["timestamps"].shape[0] - frame_num_end > 0
+        ), "No frame found in the last window_width seconds"
 
         if method == "linear":
-            coeff = (final_timestamp - self.np_arrays["timestamps"][frame_num_end:]) / window_width
+            coeff = (
+                final_timestamp - self.np_arrays["timestamps"][frame_num_end:]
+            ) / window_width
             self.np_arrays["joint_dq"][frame_num_end:] = (
                 self.np_arrays["joint_dq"][frame_num_end:] * coeff[:, np.newaxis]
             )
         elif method == "quadratic":
-            coeff = ((final_timestamp - self.np_arrays["timestamps"][frame_num_end:]) / window_width) ** 2
+            coeff = (
+                (final_timestamp - self.np_arrays["timestamps"][frame_num_end:])
+                / window_width
+            ) ** 2
             self.np_arrays["joint_dq"][frame_num_end:] = (
                 self.np_arrays["joint_dq"][frame_num_end:] * coeff[:, np.newaxis]
             )
-
-
 
     def update_joint_tau(self, window_width: float = 0.1, update_frames=True):
         """Calculate average torque in [timestamp-window_width/2, timestamp+window_width/2]
@@ -597,14 +606,18 @@ class Trajectory:
         delay_min: float = 0,
         delay_max: float = 0.2,
         attr_name: str = "joint_q",
-        specify_joint: Optional[int] = None,
-    ):
+    ) -> Tuple[np.float64, npt.NDArray[np.float64]]:
         """Calculate the delay off the new_traj with respect to the current trajectory.
         Will find the time offset that minimizes the difference of `attr_name` of the two trajectories.
+        Return the time offset for minimized absolute difference and the joint-wise time offsets.
         """
         self.init_interp_function()
         time_offsets = np.arange(delay_min, delay_max, time_precision)
-        diffs = np.zeros_like(time_offsets)
+        avg_diffs = np.zeros_like(time_offsets, dtype=np.float64)
+        joint_diffs = np.zeros(
+            (time_offsets.shape[0], self.np_arrays[attr_name].shape[1]),
+            dtype=np.float64,
+        )
         for k, time_offset in enumerate(time_offsets):
             # New trajectory should be shifted to the left if offset > 0
             new_traj_with_offset = new_traj.time_shift(
@@ -614,16 +627,14 @@ class Trajectory:
             interp_traj = self.interp_traj(
                 new_timestamps, attr_names=[attr_name], update_frames=False
             )
-            if specify_joint is None:
-                diff_sum = np.sum(
-                    interp_traj.calc_difference_norm(new_traj_with_offset, attr_name)
-                )
-            else:
-                assert 0 <= specify_joint < self.np_arrays[attr_name].shape[1], "Specified array should be smaller than data dimension"
-                shifted_vals = new_traj_with_offset.np_arrays[attr_name][:, specify_joint]
-                interp_vals = interp_traj.np_arrays[attr_name][:, specify_joint]
-                diff_sum = np.sum(np.abs(shifted_vals - interp_vals))
-            diffs[k] = diff_sum
-            # print(f"Time offset {time_offset:.5f}s, diff {diff_sum:.5f}")
 
-        return time_offsets[np.argmin(diffs)]
+            avg_diffs[k] = np.sum(
+                interp_traj.calc_difference_norm(new_traj_with_offset, attr_name)
+            )
+            shifted_vals = new_traj_with_offset.np_arrays[attr_name]
+            interp_vals = interp_traj.np_arrays[attr_name]
+            joint_diffs[k] = np.sum(np.abs(shifted_vals - interp_vals), axis=0)
+
+        avg_minimum_id = np.argmin(avg_diffs).item()
+        joint_minimum_id = np.argmin(joint_diffs, axis=0)
+        return time_offsets[avg_minimum_id], time_offsets[joint_minimum_id]
