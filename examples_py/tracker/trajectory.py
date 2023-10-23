@@ -178,7 +178,7 @@ class Trajectory:
 
     def interp_traj(
         self,
-        new_timestamps: List[float],
+        new_timestamps: npt.NDArray[np.float64],
         attr_names: List[str] = list(Frame.LIST_ATTRS.keys()),
         update_frames=True,
     ):
@@ -188,16 +188,15 @@ class Trajectory:
 
         if not self.interp_functions:
             self.init_interp_function()
-            print("Interpolation functions initialized")
 
         # Create a new trajectory
         new_traj = Trajectory()
-        new_traj.np_arrays["timestamps"] = np.array(new_timestamps)
+        new_traj.np_arrays["timestamps"] = new_timestamps.copy()
         # Interpolate all attributes
         for attr_name in attr_names:
             ref_val = self.np_arrays[attr_name]
             dim = ref_val.shape[1]
-            interp_val = np.zeros((len(new_timestamps), dim), dtype=np.float64)
+            interp_val = np.zeros((new_timestamps.shape[0], dim), dtype=np.float64)
             for k in range(dim):
                 interp_val[:, k] = self.interp_functions[attr_name][k](new_timestamps)
             new_traj.np_arrays[attr_name] = interp_val.copy()
@@ -439,12 +438,15 @@ class Trajectory:
         if update_frames:
             self.update_frames()
 
-    def smoothen_joint_dq_start(
+    def smoothen_joint_dq_start_end(
         self, window_width: float = 0.5, method: str = "linear"
     ):
-        """Smoothen the joint_dq at the start of the trajectory (first window_width seconds)
+        """Smoothen the joint_dq both at the start and the end of the trajectory (first window_width seconds)
         by applying a filter function directly to the first few frames.,
         so that the speed is continuous at the start"""
+
+        # Start
+
         frame_nums = np.searchsorted(self.np_arrays["timestamps"], window_width)
         assert frame_nums > 0, "No frame found in the first window_width seconds"
         if method == "linear":
@@ -457,6 +459,24 @@ class Trajectory:
             self.np_arrays["joint_dq"][:frame_nums] = (
                 self.np_arrays["joint_dq"][:frame_nums] * coeff[:, np.newaxis]
             )
+
+        # End
+        final_timestamp = self.np_arrays["timestamps"][-1]
+        frame_num_end = np.searchsorted(self.np_arrays["timestamps"], final_timestamp - window_width, side="right")
+        assert self.np_arrays["timestamps"].shape[0] - frame_num_end > 0, "No frame found in the last window_width seconds"
+
+        if method == "linear":
+            coeff = (final_timestamp - self.np_arrays["timestamps"][frame_num_end:]) / window_width
+            self.np_arrays["joint_dq"][frame_num_end:] = (
+                self.np_arrays["joint_dq"][frame_num_end:] * coeff[:, np.newaxis]
+            )
+        elif method == "quadratic":
+            coeff = ((final_timestamp - self.np_arrays["timestamps"][frame_num_end:]) / window_width) ** 2
+            self.np_arrays["joint_dq"][frame_num_end:] = (
+                self.np_arrays["joint_dq"][frame_num_end:] * coeff[:, np.newaxis]
+            )
+
+
 
     def update_joint_tau(self, window_width: float = 0.1, update_frames=True):
         """Calculate average torque in [timestamp-window_width/2, timestamp+window_width/2]
@@ -508,7 +528,7 @@ class Trajectory:
         self.np_arrays["timestamps"] = self.np_arrays["timestamps"] / new_scale
         if update_joint_dq:
             self.update_joint_dq()
-            self.smoothen_joint_dq_start()
+            self.smoothen_joint_dq_start_end()
         if update_joint_tau:
             assert (
                 update_joint_dq
@@ -574,9 +594,10 @@ class Trajectory:
         self,
         new_traj: "Trajectory",
         time_precision: float = 0.001,
-        delay_min: float = -0.1,
-        delay_max: float = 0.1,
+        delay_min: float = 0,
+        delay_max: float = 0.2,
         attr_name: str = "joint_q",
+        specify_joint: Optional[int] = None,
     ):
         """Calculate the delay off the new_traj with respect to the current trajectory.
         Will find the time offset that minimizes the difference of `attr_name` of the two trajectories.
@@ -589,13 +610,19 @@ class Trajectory:
             new_traj_with_offset = new_traj.time_shift(
                 -time_offset, inplace=False, update_frames=False
             )
-            new_timestamps = new_traj_with_offset.np_arrays["timestamps"].tolist()
+            new_timestamps = new_traj_with_offset.np_arrays["timestamps"].copy()
             interp_traj = self.interp_traj(
                 new_timestamps, attr_names=[attr_name], update_frames=False
             )
-            diff_sum = np.sum(
-                interp_traj.calc_difference_norm(new_traj_with_offset, attr_name)
-            )
+            if specify_joint is None:
+                diff_sum = np.sum(
+                    interp_traj.calc_difference_norm(new_traj_with_offset, attr_name)
+                )
+            else:
+                assert 0 <= specify_joint < self.np_arrays[attr_name].shape[1], "Specified array should be smaller than data dimension"
+                shifted_vals = new_traj_with_offset.np_arrays[attr_name][:, specify_joint]
+                interp_vals = interp_traj.np_arrays[attr_name][:, specify_joint]
+                diff_sum = np.sum(np.abs(shifted_vals - interp_vals))
             diffs[k] = diff_sum
             # print(f"Time offset {time_offset:.5f}s, diff {diff_sum:.5f}")
 
