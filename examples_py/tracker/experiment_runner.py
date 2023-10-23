@@ -38,7 +38,7 @@ class ExperimentRunner:
         arm = sdk.ArmInterface(hasGripper=True)
         pt = PoseTracker(arm, teleop_dt=self.teleop_dt, track_dt=self.track_dt)
         pt.start_teleop_tracking(self.demo_duration)
-        os.makedirs(self.data_dir)
+        os.makedirs(self.data_dir, exist_ok=True)
         pt.tracked_traj.save_frames(f"{self.data_dir}/teleop.json")
 
     def sweep_params(self):

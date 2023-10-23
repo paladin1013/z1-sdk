@@ -1,3 +1,4 @@
+from curses import window
 import numpy as np
 import unitree_arm_interface as sdk
 import time
@@ -9,7 +10,7 @@ from matplotlib.figure import Figure
 from matplotlib.axes import Axes
 import matplotlib.pyplot as plt
 import numpy.typing as npt
-
+from queue import Queue
 
 class PoseTracker:
     def __init__(
@@ -32,6 +33,7 @@ class PoseTracker:
         assert (
             self.teleop_dt % self.track_dt == 0
         ), f"teleop_dt should be a multiple of track_dt {track_dt}"
+        self.spacemouse_queue: Queue[npt.NDArray[np.float64]] = Queue()
 
     def reset(self):
         self.tracked_traj = Trajectory()
@@ -47,6 +49,20 @@ class PoseTracker:
             gripper_q=[self.arm.lowstate.q[6]],
         )
         self.tracked_traj.frames.append(new_frame)
+
+    def reset_spacemouse_queue(self, window_size: int = 10):
+        self.spacemouse_queue: Queue[npt.NDArray[np.float64]] = Queue(window_size)
+    
+    def get_smoothed_spacemouse_output(self, sm: Spacemouse):
+        assert self.spacemouse_queue.maxsize > 0, "Please call reset_spacemouse_queue() to initialize the queue"
+        state = sm.get_motion_state_transformed()
+        if self.spacemouse_queue.maxsize > 0 and self.spacemouse_queue._qsize() == self.spacemouse_queue.maxsize:
+            self.spacemouse_queue._get()
+        self.spacemouse_queue.put_nowait(state)
+        
+        return np.mean(np.array(list(self.spacemouse_queue.queue)), axis=0)
+
+        
 
     def start_teleop_tracking(
         self,
@@ -75,28 +91,28 @@ class PoseTracker:
                 print(
                     "Teleop tracking ready. Waiting for spacemouse movement to start."
                 )
-
+                self.reset_spacemouse_queue(window_size = 10)
                 while True:
-                    state = sm.get_motion_state_transformed()
                     button_left = sm.is_button_pressed(0)
                     button_right = sm.is_button_pressed(1)
+                    state = self.get_smoothed_spacemouse_output(sm)
                     if state.any() or button_left or button_right:
                         print(f"Start tracking! Duration: {duration}s")
                         break
 
-                self.reset()  # will reset self.tracked_traj and self.start_time
+                self.reset()  # will reset self.tracked_traj and se lf.start_time
 
                 directions = np.zeros(7, dtype=np.float64)
-
+                spacemouse_input_queue = Queue()
                 while time.monotonic() - self.start_time <= duration:
                     print(
                         f"Time elapsed: {time.monotonic() - self.start_time:.03f}s",
                         end="\r",
                     )
-                    state = sm.get_motion_state_transformed()
                     # Spacemouse state is in the format of (x y z roll pitch yaw)
                     prev_directions = directions
                     directions = np.zeros(7, dtype=np.float64)
+                    state = self.get_smoothed_spacemouse_output(sm)
                     directions[:3] = state[3:]
                     directions[3:6] = state[:3]
                     button_left = sm.is_button_pressed(0)
@@ -189,12 +205,12 @@ class PoseTracker:
         elif ctrl_method == sdk.ArmFSMState.LOWCMD:
             self.arm.setFsmLowcmd()
             default_kp = np.array([20.0, 30.0, 30.0, 20.0, 15.0, 10.0, 20.0])
-            kd = self.arm.lowcmd.kd
+            default_kd = np.array([2000.0, 2000.0, 2000.0, 2000.0, 2000.0, 2000.0, 2000.0])
             if ctrl_method == sdk.ArmFSMState.LOWCMD:
                 assert (
                     self.stiffness is not None and 0 < self.stiffness <= 2
                 ), "stiffness should be initialized in (0, 2]"
-            self.arm.lowcmd.setControlGain(self.stiffness * default_kp, kd)
+            self.arm.lowcmd.setControlGain(self.stiffness * default_kp, self.stiffness * default_kd)
         init_start_time = time.monotonic()
 
         while True:
