@@ -66,27 +66,14 @@ class Frame:
 
 class Trajectory:
     def __init__(
-        self, frames: Optional[List[Frame]] = None, file_name: Optional[str] = None
+        self,
+        frames: Optional[List[Frame]] = None,
+        file_name: Optional[str] = None,
+        timestamps: Optional[npt.NDArray[np.float64]] = None,
     ):
         self.np_arrays: Dict[str, npt.NDArray[np.float64]] = {}
 
-        if frames is None:
-            if file_name is None:
-                self.frames: List[Frame] = []
-            else:
-                with open(file_name, "r") as f:
-                    json_data = json.load(f)
-                    frame_num = len(json_data)
-                    self.np_arrays["timestamps"] = np.zeros(frame_num, dtype=np.float64)
-                    for attr_name in Frame.LIST_ATTRS:
-                        self.np_arrays[attr_name] = np.zeros(
-                            (frame_num, Frame.LIST_ATTRS[attr_name]), dtype=np.float64
-                        )
-                    for k, frame in enumerate(json_data):
-                        self.np_arrays["timestamps"][k] = frame["timestamp"]
-                        for attr_name in Frame.LIST_ATTRS:
-                            self.np_arrays[attr_name][k] = np.array(frame[attr_name])
-        else:
+        if frames is not None:
             frame_num = len(frames)
             self.np_arrays["timestamps"] = np.zeros(frame_num, dtype=np.float64)
             for attr_name in Frame.LIST_ATTRS:
@@ -97,6 +84,27 @@ class Trajectory:
                 self.np_arrays["timestamps"][k] = frame.timestamp
                 for attr_name in Frame.LIST_ATTRS:
                     self.np_arrays[attr_name][k] = np.array(getattr(frame, attr_name))
+
+        elif file_name is not None:
+            with open(file_name, "r") as f:
+                json_data = json.load(f)
+                frame_num = len(json_data)
+                self.np_arrays["timestamps"] = np.zeros(frame_num, dtype=np.float64)
+                for attr_name in Frame.LIST_ATTRS:
+                    self.np_arrays[attr_name] = np.zeros(
+                        (frame_num, Frame.LIST_ATTRS[attr_name]), dtype=np.float64
+                    )
+                for k, frame in enumerate(json_data):
+                    self.np_arrays["timestamps"][k] = frame["timestamp"]
+                    for attr_name in Frame.LIST_ATTRS:
+                        self.np_arrays[attr_name][k] = np.array(frame[attr_name])
+
+        elif timestamps is not None:
+            self.np_arrays["timestamps"] = timestamps
+            for attr_name in Frame.LIST_ATTRS:
+                self.np_arrays[attr_name] = np.zeros(
+                    (timestamps.shape[0], Frame.LIST_ATTRS[attr_name]), dtype=np.float64
+                )
 
         self.interp_functions: Dict[str, List[interp1d]] = {}
 

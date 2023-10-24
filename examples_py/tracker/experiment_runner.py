@@ -6,8 +6,9 @@ import numpy as np
 import numpy.typing as npt
 import os
 from .pose_tracker import PoseTracker
-from .trajectory import Trajectory
+from .trajectory import Frame, Trajectory
 import matplotlib.pyplot as plt
+import time
 
 
 class ExperimentRunner:
@@ -166,3 +167,19 @@ class ExperimentRunner:
                 f"Speed: {replay_speed:.1f} Stiffness: {stiffness: .1f} Delay: {avg_delay:.3f} Average difference: {avg_diff:.4f} \
 dq var: {avg_dq_noise:.4f} tau var: {avg_tau_noise:.4f}"
             )
+
+    def joint_movement_test(self, steps: List[Tuple[List[float], float]]):
+        """Test the joint movement. Each step should be a tuple of (joint_q, duration)"""
+
+        arm = sdk.ArmInterface(hasGripper=True)
+        pt = PoseTracker(
+            arm,
+            teleop_dt=self.teleop_dt,
+            track_dt=self.track_dt,
+            stiffness=self.stiffnesses[0],
+        )
+        for k, (joint_q, duration) in enumerate(steps):
+            pt.go_to_joint_pos(joint_q=joint_q, gripper_q=[0.0], duration=duration)
+            time.sleep(0.5)
+            os.makedirs(self.data_dir, exist_ok=True)
+            pt.tracked_traj.save_frames(f"{self.data_dir}/joint_movement{k}.json")
