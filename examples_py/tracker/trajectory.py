@@ -115,7 +115,10 @@ class Trajectory:
     def copy(self):
         """Return a copy of the current trajectory"""
         new_traj = Trajectory()
-        new_traj.np_arrays = self.np_arrays.copy()
+        for key, val in self.np_arrays.items():
+            new_traj.np_arrays[key] = val.copy()
+        for key, val in self.interp_functions.items():
+            new_traj.interp_functions[key] = val.copy()
         return new_traj
 
     def __getitem__(self, idx: int):
