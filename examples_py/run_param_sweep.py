@@ -1,15 +1,16 @@
 from tracker import ExperimentRunner
 import matplotlib.pyplot as plt
+import unitree_arm_interface as sdk
 
 if __name__ == "__main__":
     runner = ExperimentRunner(
         teleop_dt=0.02,
         track_dt=0.002,
         demo_duration=10,
-        replay_duration=20,
-        trial_id=2,
+        replay_duration=10,
+        trial_id=5,
         # replay_speeds=[0.2, 0.5, 1.0],
-        replay_speeds=[0.5],
+        replay_speeds=[1],
         stiffnesses=[1]
         # kp_scales=[1],
         # kd_scales=[0.5, 0.75, 1.0, 1.5]
@@ -22,11 +23,14 @@ if __name__ == "__main__":
     steps = [
         # ([0.5, 0.0, 0.0, 0.0, 0.0, 0.0], 5.0),
         # ([0.0, 0.0, 0.0, 0.0, 0.0, 0.0], 5.0),
-        # ([0.0, 0.0, -1.25, 0.0, 0.0, 0.0], 5.0),
+        ([0.0, 0.0, -1.25, 0.0, 0.0, 0.0], 5.0),
         ([0.0, 1.25, -1.25, 0.0, 0.0, 0.0], 5.0),
-        # ([0.0, 0.0, -1.25, 0.0, 0.0, 0.0], 5.0),
+        ([0.0, 0.0, -1.25, 0.0, 0.0, 0.0], 5.0),
         ([0.0, 0.0, 0.0, 0.0, 0.0, 0.0], 5.0),
     ]
-    # durations = [5.0, 5.0, 12.5, 12.5, 12.5, 12.5]
-    runner.joint_movement_test(steps)
-    # plt.show()
+    runner.joint_movement_test(steps, ctrl_method=sdk.ArmFSMState.JOINTCTRL)
+    runner.joint_movement_analysis(steps, ctrl_method=sdk.ArmFSMState.JOINTCTRL)
+    runner.joint_movement_test(steps, ctrl_method=sdk.ArmFSMState.LOWCMD)
+    runner.joint_movement_analysis(steps, ctrl_method=sdk.ArmFSMState.LOWCMD)
+
+    plt.show()

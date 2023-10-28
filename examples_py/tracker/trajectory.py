@@ -111,13 +111,10 @@ class Trajectory:
         """For faster computation as a whole trajectory. Values should be kept the same as self.frames. 
         Keys includes `timestamps` and all attributes in `Frame.LIST_ATTRS`"""
 
-        self.update_frames()
-
     def copy(self):
         """Return a copy of the current trajectory"""
         new_traj = Trajectory()
         new_traj.np_arrays = self.np_arrays.copy()
-        self.update_frames()
         return new_traj
 
     def __getitem__(self, idx: int):
@@ -132,42 +129,6 @@ class Trajectory:
             attr_dict[attr_name] = self.np_arrays[attr_name][idx]
         frame = Frame(self.np_arrays["timestamps"][idx], **attr_dict)
         return frame
-
-    def update_np_arrays(self):
-        """Synchronize the numpy arrays with the current frames"""
-        self.np_arrays["timestamps"] = np.array(
-            [frame.timestamp for frame in self.frames]
-        )
-        for attr_name in Frame.LIST_ATTRS:
-            self.np_arrays[attr_name] = np.array(
-                [getattr(frame, attr_name) for frame in self.frames]
-            )
-
-    def update_frames(self):
-        """Synchronize the frames with the current numpy arrays"""
-        # Match the length of frames and timestamps:
-        if "timestamps" not in self.np_arrays:
-            self.frames = []
-            return
-
-        if not hasattr(self, "frames"):
-            self.frames = []
-
-        if len(self.frames) > len(self.np_arrays["timestamps"]):
-            self.frames = self.frames[: len(self.np_arrays["timestamps"])]
-        elif len(self.frames) < len(self.np_arrays["timestamps"]):
-            for k in range(len(self.np_arrays["timestamps"]) - len(self.frames)):
-                self.frames.append(Frame(0))
-
-        for k, frame in enumerate(self.frames):
-            frame.timestamp = self.np_arrays["timestamps"][k]
-            for attr_name in Frame.LIST_ATTRS:
-                if (
-                    attr_name in self.np_arrays
-                    and self.np_arrays[attr_name].shape[0] > k
-                ):
-                    array: npt.NDArray = self.np_arrays[attr_name][k]
-                    setattr(frame, attr_name, array.tolist())
 
     def save_frames(self, file_name: str):
         with open(file_name, "w") as f:
@@ -188,11 +149,9 @@ class Trajectory:
         self,
         new_timestamps: npt.NDArray[np.float64],
         attr_names: List[str] = list(Frame.LIST_ATTRS.keys()),
-        update_frames=True,
     ):
         """This method will interpolate a new trajectory, using the postures and the joint states from
-        the reference trajectory, and query at the input timestamps.
-        To accelarate, set update_frames to False"""
+        the reference trajectory, and query at the input timestamps."""
 
         if not self.interp_functions:
             self.init_interp_function()
@@ -208,8 +167,6 @@ class Trajectory:
             for k in range(dim):
                 interp_val[:, k] = self.interp_functions[attr_name][k](new_timestamps)
             new_traj.np_arrays[attr_name] = interp_val.copy()
-        if update_frames:
-            new_traj.update_frames()
         return new_traj
 
     def init_interp_function(self):
@@ -304,7 +261,7 @@ class Trajectory:
 
             return new_frame
 
-    def calc_difference(self, new_traj: "Trajectory", update_frames=True):
+    def calc_difference(self, new_traj: "Trajectory"):
         """
         Calculate the difference of all attributes between two trajectories.
         When applying this method, please make sure new_traj has the same timestamps as the current one.
@@ -321,8 +278,6 @@ class Trajectory:
             diff_traj.np_arrays[attr_name] = (
                 new_traj.np_arrays[attr_name] - self.np_arrays[attr_name]
             )
-        if update_frames:
-            diff_traj.update_frames()
         return diff_traj
 
     def calc_difference_norm(
@@ -384,9 +339,7 @@ class Trajectory:
         ax.set_xlabel("Time (s)")
         ax.set_title(f"{title}")
 
-    def update_joint_dq(
-        self, window_width: float = 0.1, method: str = "linfit", update_frames=True
-    ):
+    def update_joint_dq(self, window_width: float = 0.1, method: str = "linfit"):
         """Calculate average speed in [timestamp-window_width/2, timestamp+window_width/2] for each joint and update in self.np_arrays["joint_dq"]"""
 
         assert method in ["linfit", "diff"]
@@ -421,9 +374,6 @@ class Trajectory:
                     self.np_arrays["joint_q"][start_frame : end_frame + 1],
                 )
                 self.np_arrays["joint_dq"][k] = reg.coef_.squeeze()
-
-        if update_frames:
-            self.update_frames()
 
     def apply_moving_average(self, attr_names: List[str], window_width: float = 0.2):
         """Apply np.convolve to smoothen the attribute in place"""
@@ -495,7 +445,7 @@ class Trajectory:
                 self.np_arrays["joint_dq"][frame_num_end:] * coeff[:, np.newaxis]
             )
 
-    def update_joint_tau(self, window_width: float = 0.1, update_frames=True):
+    def update_joint_tau(self, window_width: float = 0.1):
         """Calculate average torque in [timestamp-window_width/2, timestamp+window_width/2]
         for each joint and update in self.np_arrays["joint_tau"]"""
 
@@ -530,15 +480,11 @@ class Trajectory:
                 np.zeros(6, dtype=np.float64),
             )
 
-        if update_frames:
-            self.update_frames()
-
     def rescale_speed(
         self,
         new_scale: float,
         update_joint_dq: bool = True,
         update_joint_tau: bool = True,
-        update_frames=True,
     ):
         """Rescale the speed of the trajectory by a factor of `new_scale`"""
 
@@ -552,15 +498,10 @@ class Trajectory:
             ), "update_joint_tau requires update_joint_dq to be True"
             self.update_joint_tau()
 
-        if update_frames:
-            self.update_frames()
-
-    def time_shift(self, time_offset: float, inplace: bool = True, update_frames=True):
-        """Shift the time of the trajectory by `time_offset`. To speedup, set update_frames to False"""
+    def time_shift(self, time_offset: float, inplace: bool = True):
+        """Shift the time of the trajectory by `time_offset`."""
         if inplace:
             self.np_arrays["timestamps"] += time_offset
-            if update_frames:
-                self.update_frames()
             return self
         else:
             new_traj = Trajectory()
@@ -568,11 +509,9 @@ class Trajectory:
             new_traj.np_arrays["timestamps"] = (
                 self.np_arrays["timestamps"] + time_offset
             )
-            if update_frames:
-                new_traj.update_frames()
             return new_traj
 
-    def truncate(self, end_time: float, inplace: bool = True, update_frames=True):
+    def truncate(self, end_time: float, inplace: bool = True):
         """Truncate the current trajectory to the input end_time"""
         if inplace:
             next_frame_id = np.argmax(self.np_arrays["timestamps"] > end_time)
@@ -587,8 +526,6 @@ class Trajectory:
                     self.np_arrays[attr_name] = self.np_arrays[attr_name][
                         :next_frame_id
                     ]
-                if update_frames:
-                    self.update_frames()
                 return self
         else:
             new_traj = Trajectory()
@@ -603,8 +540,6 @@ class Trajectory:
                     new_traj.np_arrays[attr_name] = self.np_arrays[attr_name][
                         :next_frame_id
                     ]
-            if update_frames:
-                new_traj.update_frames()
             return new_traj
 
     def calc_delay(
@@ -628,13 +563,9 @@ class Trajectory:
         )
         for k, time_offset in enumerate(time_offsets):
             # New trajectory should be shifted to the left if offset > 0
-            new_traj_with_offset = new_traj.time_shift(
-                -time_offset, inplace=False, update_frames=False
-            )
+            new_traj_with_offset = new_traj.time_shift(-time_offset, inplace=False)
             new_timestamps = new_traj_with_offset.np_arrays["timestamps"].copy()
-            interp_traj = self.interp_traj(
-                new_timestamps, attr_names=[attr_name], update_frames=False
-            )
+            interp_traj = self.interp_traj(new_timestamps, attr_names=[attr_name])
 
             avg_diffs[k] = np.sum(
                 interp_traj.calc_difference_norm(new_traj_with_offset, attr_name)
@@ -645,4 +576,8 @@ class Trajectory:
 
         avg_minimum_id = np.argmin(avg_diffs).item()
         joint_minimum_id = np.argmin(joint_diffs, axis=0)
+        if time_offsets[avg_minimum_id] + time_precision >= delay_max:
+            Warning(
+                f"trajectory.calc_delay: delay exceeds {delay_max}. Please increase delay_max."
+            )
         return time_offsets[avg_minimum_id], time_offsets[joint_minimum_id]

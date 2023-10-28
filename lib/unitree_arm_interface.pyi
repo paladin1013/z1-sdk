@@ -305,6 +305,13 @@ class Z1Model:
         ...
 
 class ArmInterface:
+    """Warning!!! For some reasons, the final state in the trajectory of low level command is keeped in the sdk object
+If one have used the low level command and then call arm.backToStart(), even if the arm is reset to the home position,
+the last state in the low level command trajectory will be kept and the arm will move to that state immediately
+once arm.setFsm(sdk.ArmFSMState.LOWCMD) or arm.setFsmLowCmd() is called.
+To avoid this, please instantiate a new sdk interface object every time before running in low level command.
+TODO: find out some other ways to fix this problem
+"""
     def __init__(self, hasGripper: bool) -> None: ...
 
     q: npt.NDArray[np.float64]

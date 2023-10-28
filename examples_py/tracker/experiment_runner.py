@@ -1,5 +1,6 @@
 from matplotlib.axes import Axes
 from matplotlib.figure import Figure
+from matplotlib.pylab import f
 import unitree_arm_interface as sdk
 from typing import Generator, List, Optional, Tuple, cast
 import numpy as np
@@ -38,9 +39,9 @@ class ExperimentRunner:
     def record_teleop_demo(self):
         arm = sdk.ArmInterface(hasGripper=True)
         pt = PoseTracker(arm, teleop_dt=self.teleop_dt, track_dt=self.track_dt)
-        pt.start_teleop_tracking(self.demo_duration)
+        tracked_traj = pt.start_teleop_tracking(self.demo_duration)
         os.makedirs(self.data_dir, exist_ok=True)
-        pt.tracked_traj.save_frames(f"{self.data_dir}/teleop.json")
+        tracked_traj.save_frames(f"{self.data_dir}/teleop.json")
 
     def sweep_params(self):
         """Will sweep parameters in self.replay_speeds and self.stiffnesses and record trajectories"""
@@ -67,8 +68,10 @@ class ExperimentRunner:
                 print(
                     f"Start trajectory replaying: speed {replay_speed:.1f}, stiffness {stiffness:.1f}"
                 )
-                pt.replay_traj(reference_traj, ctrl_method=sdk.ArmFSMState.LOWCMD)
-                pt.tracked_traj.save_frames(replay_file)
+                tracked_traj = pt.replay_traj(
+                    reference_traj, ctrl_method=sdk.ArmFSMState.LOWCMD
+                )
+                tracked_traj.save_frames(replay_file)
 
     def load_experiment_results(self):
         """Generate a list of tuple including (replay_speed, stiffness, reference_traj, replay_traj)"""
@@ -122,8 +125,8 @@ class ExperimentRunner:
             start_time = 0
         if end_time is None:
             end_time = min(
-                reference_traj.frames[-1].timestamp,
-                tracked_traj.frames[-1].timestamp,
+                reference_traj.np_arrays["timestamps"][-1],
+                tracked_traj.np_arrays["timestamps"][-1],
             )
         attr_names = ["joint_q", "joint_dq", "joint_tau"]
         trajs = [reference_traj, tracked_traj, diff_traj]
@@ -168,8 +171,12 @@ class ExperimentRunner:
 dq var: {avg_dq_noise:.4f} tau var: {avg_tau_noise:.4f}"
             )
 
-    def joint_movement_test(self, steps: List[Tuple[List[float], float]]):
+    def joint_movement_test(
+        self, steps: List[Tuple[List[float], float]], ctrl_method: sdk.ArmFSMState
+    ):
         """Test the joint movement. Each step should be a tuple of (joint_q, duration)"""
+
+        assert ctrl_method in [sdk.ArmFSMState.LOWCMD, sdk.ArmFSMState.JOINTCTRL]
 
         arm = sdk.ArmInterface(hasGripper=True)
         pt = PoseTracker(
@@ -178,8 +185,76 @@ dq var: {avg_dq_noise:.4f} tau var: {avg_tau_noise:.4f}"
             track_dt=self.track_dt,
             stiffness=self.stiffnesses[0],
         )
+
         for k, (joint_q, duration) in enumerate(steps):
-            pt.go_to_joint_pos(joint_q=joint_q, gripper_q=[0.0], duration=duration)
-            time.sleep(0.5)
             os.makedirs(self.data_dir, exist_ok=True)
-            pt.tracked_traj.save_frames(f"{self.data_dir}/joint_movement{k}.json")
+            ref_traj, tracked_traj = pt.go_to_joint_pos(
+                joint_q=joint_q,
+                gripper_q=[0.0],
+                duration=duration,
+                ctrl_method=ctrl_method,
+            )
+            ref_traj.save_frames(
+                f"{self.data_dir}/{str(ctrl_method).split('.')[-1].lower()}_movement{k}_reference.json"
+            )
+            time.sleep(0.5)
+            tracked_traj.save_frames(
+                f"{self.data_dir}/{str(ctrl_method).split('.')[-1].lower()}_movement{k}.json"
+            )
+
+    def joint_movement_analysis(
+        self,
+        steps: List[Tuple[List[float], float]],
+        ctrl_method: Optional[sdk.ArmFSMState] = None,
+    ):
+        """Analyze the joint movement. Each step should be a tuple of (joint_q, duration).
+        Assign ctrl_method for single method analysis. If None, analyze both methods.
+        Please make sure the joint movement test is done before calling this function.
+        """
+
+        if ctrl_method in [sdk.ArmFSMState.LOWCMD, sdk.ArmFSMState.JOINTCTRL]:
+            # Analyze results from single method
+            for k, (joint_q, duration) in enumerate(steps):
+                reference_traj = Trajectory(
+                    file_name=f"{self.data_dir}/{str(ctrl_method).split('.')[-1].lower()}_movement{k}_reference.json"
+                )
+                tracked_traj = Trajectory(
+                    file_name=f"{self.data_dir}/{str(ctrl_method).split('.')[-1].lower()}_movement{k}.json"
+                )
+                avg_delay, joint_wise_delay = reference_traj.calc_delay(tracked_traj)
+                tracked_traj.time_shift(float(-avg_delay))
+                diff_traj, fig = self.compare_traj(reference_traj, tracked_traj)
+                print(f"Step num: {k}, delay: {avg_delay:.3f}")
+
+        elif ctrl_method is None:
+            for k, (joint_q, duration) in enumerate(steps):
+                # We first find the joint that has the largest movement
+                if k == 0:
+                    diff_q = np.array(joint_q)
+                else:
+                    diff_q = np.array(joint_q) - np.array(steps[k - 1][0])
+                joint_id = np.argmax(np.abs(diff_q)) + 1
+
+                lowcmd_reference_traj = Trajectory(
+                    file_name=f"{self.data_dir}/lowcmd_movement{k}_reference.json"
+                )
+                lowcmd_tracked_traj = Trajectory(
+                    file_name=f"{self.data_dir}/lowcmd_movement{k}.json"
+                )
+                (
+                    lowcmd_avg_delay,
+                    lowcmd_joint_wise_delay,
+                ) = lowcmd_reference_traj.calc_delay(lowcmd_tracked_traj)
+                jointctrl_reference_traj = Trajectory(
+                    file_name=f"{self.data_dir}/jointctrl_movement{k}_reference.json"
+                )
+                jointctrl_tracked_traj = Trajectory(
+                    file_name=f"{self.data_dir}/jointctrl_movement{k}.json"
+                )
+                (
+                    joint_avg_delay,
+                    joint_joint_wise_delay,
+                ) = jointctrl_reference_traj.calc_delay(jointctrl_tracked_traj)
+                print(
+                    f"Step num: {k}, lowcmd delay: {lowcmd_avg_delay:.3f}, jointctrl delay: {joint_avg_delay:.3f}"
+                )

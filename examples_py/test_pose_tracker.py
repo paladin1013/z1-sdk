@@ -23,8 +23,8 @@ if __name__ == "__main__":
 
     pt = PoseTracker(arm, teleop_dt=0.02, track_dt=track_dt, stiffness=1)
 
-    pt.start_teleop_tracking(duration)
-    pt.tracked_traj.save_frames(f"{data_dir}/tracked.json")
+    tracked_traj = pt.start_teleop_tracking(duration)
+    tracked_traj.save_frames(f"{data_dir}/tracked.json")
 
     ## Update reference trajectory
     teleop_traj = Trajectory(
@@ -74,8 +74,7 @@ if __name__ == "__main__":
         # interp_traj = replay_traj.interp_traj(reference_traj.np_arrays["timestamps"].tolist())
         # diff_traj = reference_traj.calc_difference(interp_traj)
 
-        avg_delay = reference_traj.calc_delay(replay_traj)
-        joint_delays = [reference_traj.calc_delay(replay_traj, specify_joint=k) for k in range(6)]
+        avg_delay, joint_delays = reference_traj.calc_delay(replay_traj)
         joint_results = ' '.join([f"{delay:.3f}" for delay in joint_delays])
         print(
             f"Stiffness: {stiffness:.1f} Avg delay: {avg_delay:.3f} Joint {joint_results}"
