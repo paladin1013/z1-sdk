@@ -28,9 +28,10 @@ if __name__ == "__main__":
         ([0.0, 0.0, -1.25, 0.0, 0.0, 0.0], 5.0),
         ([0.0, 0.0, 0.0, 0.0, 0.0, 0.0], 5.0),
     ]
-    runner.joint_movement_test(steps, ctrl_method=sdk.ArmFSMState.JOINTCTRL)
-    runner.joint_movement_analysis(steps, ctrl_method=sdk.ArmFSMState.JOINTCTRL)
-    runner.joint_movement_test(steps, ctrl_method=sdk.ArmFSMState.LOWCMD)
+    # runner.joint_movement_test(steps, ctrl_method=sdk.ArmFSMState.JOINTCTRL)
+    # runner.joint_movement_analysis(steps, ctrl_method=sdk.ArmFSMState.JOINTCTRL)
+    runner.joint_movement_replay(steps)
+    # runner.joint_movement_test(steps, ctrl_method=sdk.ArmFSMState.LOWCMD)
     runner.joint_movement_analysis(steps, ctrl_method=sdk.ArmFSMState.LOWCMD)
 
     plt.show()

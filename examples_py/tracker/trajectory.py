@@ -12,6 +12,7 @@ import unitree_arm_interface as sdk
 from tqdm import tqdm
 import time
 from sklearn.linear_model import LinearRegression
+import warnings
 
 
 @dataclass
@@ -547,7 +548,7 @@ class Trajectory:
         new_traj: "Trajectory",
         time_precision: float = 0.001,
         delay_min: float = 0,
-        delay_max: float = 0.2,
+        delay_max: float = 0.5,
         attr_name: str = "joint_q",
     ) -> Tuple[np.float64, npt.NDArray[np.float64]]:
         """Calculate the delay off the new_traj with respect to the current trajectory.
@@ -577,7 +578,7 @@ class Trajectory:
         avg_minimum_id = np.argmin(avg_diffs).item()
         joint_minimum_id = np.argmin(joint_diffs, axis=0)
         if time_offsets[avg_minimum_id] + time_precision >= delay_max:
-            Warning(
+            warnings.warn(
                 f"trajectory.calc_delay: delay exceeds {delay_max}. Please increase delay_max."
             )
         return time_offsets[avg_minimum_id], time_offsets[joint_minimum_id]

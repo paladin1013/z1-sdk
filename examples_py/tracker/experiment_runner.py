@@ -1,6 +1,5 @@
 from matplotlib.axes import Axes
 from matplotlib.figure import Figure
-from matplotlib.pylab import f
 import unitree_arm_interface as sdk
 from typing import Generator, List, Optional, Tuple, cast
 import numpy as np
@@ -178,15 +177,14 @@ dq var: {avg_dq_noise:.4f} tau var: {avg_tau_noise:.4f}"
 
         assert ctrl_method in [sdk.ArmFSMState.LOWCMD, sdk.ArmFSMState.JOINTCTRL]
 
-        arm = sdk.ArmInterface(hasGripper=True)
-        pt = PoseTracker(
-            arm,
-            teleop_dt=self.teleop_dt,
-            track_dt=self.track_dt,
-            stiffness=self.stiffnesses[0],
-        )
-
         for k, (joint_q, duration) in enumerate(steps):
+            arm = sdk.ArmInterface(hasGripper=True)
+            pt = PoseTracker(
+                arm,
+                teleop_dt=self.teleop_dt,
+                track_dt=self.track_dt,
+                stiffness=self.stiffnesses[0],
+            )
             os.makedirs(self.data_dir, exist_ok=True)
             ref_traj, tracked_traj = pt.go_to_joint_pos(
                 joint_q=joint_q,
@@ -200,6 +198,28 @@ dq var: {avg_dq_noise:.4f} tau var: {avg_tau_noise:.4f}"
             time.sleep(0.5)
             tracked_traj.save_frames(
                 f"{self.data_dir}/{str(ctrl_method).split('.')[-1].lower()}_movement{k}.json"
+            )
+            
+    def joint_movement_replay(self, steps: List[Tuple[List[float], float]]):
+        """Replay the joint movement recorded by jointctrl in lowcmd. 
+        joint_movement_test(steps, ctrl_method=sdk.ArmFSMState.JOINTCTRL) should be executed first
+        """
+
+        for k, (joint_q, duration) in enumerate(steps):
+            arm = sdk.ArmInterface(hasGripper=True)
+            pt = PoseTracker(
+                arm,
+                teleop_dt=self.teleop_dt,
+                track_dt=self.track_dt,
+                stiffness=self.stiffnesses[0],
+            )
+
+            os.makedirs(self.data_dir, exist_ok=True)
+            jointctrl_traj = Trajectory(file_name=f"{self.data_dir}/jointctrl_movement{k}.json")
+            jointctrl_traj.save_frames(f"{self.data_dir}/lowcmd_movement{k}_reference.json")
+            tracked_traj = pt.replay_traj(jointctrl_traj, ctrl_method=sdk.ArmFSMState.LOWCMD, back_to_start=False, start_from_home=False)
+            tracked_traj.save_frames(
+                f"{self.data_dir}/lowcmd_movement{k}.json"
             )
 
     def joint_movement_analysis(

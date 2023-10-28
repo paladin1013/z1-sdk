@@ -271,7 +271,6 @@ class PoseTracker:
             sdk.ArmFSMState.LOWCMD,
         ], "ctrl_method should be either sdk.ArmFSMState.JOINTCTRL, sdk.ArmFSMState.CARTESIAN or sdk.ArmFSMState.LOWCMD"
 
-        print(f"Start replaying trajectory!")
         self.arm.loopOn()
 
         if ctrl_method == sdk.ArmFSMState.JOINTCTRL:
