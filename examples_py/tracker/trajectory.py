@@ -234,7 +234,7 @@ class Trajectory:
                     prev_val = self.np_arrays[attr_name][next_frame_idx - 1]
                     next_val = self.np_arrays[attr_name][next_frame_idx]
                     new_frame_dict[attr_name] = (
-                        prev_val * prev_ratio + next_val * (1 - prev_ratio)
+                        prev_val * (1 - prev_ratio) + next_val * prev_ratio
                     ).tolist()
                 new_frame = Frame(new_timestamp, **new_frame_dict)
 

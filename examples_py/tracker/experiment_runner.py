@@ -11,7 +11,6 @@ import matplotlib.pyplot as plt
 import time
 
 
-
 class ExperimentRunner:
     """A wrapper to run multiple experiments and analyze results to optimize parameters"""
 
@@ -24,7 +23,6 @@ class ExperimentRunner:
         trial_id: int,
         replay_speeds: List[float],
         stiffnesses: List[float],
-        apply_inverse_dynamics: bool = True,
     ):
         self.teleop_dt = teleop_dt
         self.track_dt = track_dt
@@ -36,7 +34,6 @@ class ExperimentRunner:
         )
         self.replay_speeds = replay_speeds
         self.stiffnesses = stiffnesses
-        self.apply_inverse_dynamics = apply_inverse_dynamics
 
     def record_teleop_demo(self):
         arm = sdk.ArmInterface(hasGripper=True)
@@ -52,7 +49,7 @@ class ExperimentRunner:
         for replay_speed in self.replay_speeds:
             reference_file = f"{self.data_dir}/duration{self.replay_duration}_speed{replay_speed:.1f}_reference.json"
             reference_traj = teleop_traj.copy()
-            reference_traj.rescale_speed(replay_speed, update_joint_tau=self.apply_inverse_dynamics)
+            reference_traj.rescale_speed(replay_speed)
             reference_traj.apply_moving_average(["joint_dq", "joint_tau"])
             reference_traj.truncate(self.replay_duration)
             reference_traj.save_frames(reference_file)
@@ -175,11 +172,19 @@ dq var: {avg_dq_noise:.4f} tau var: {avg_tau_noise:.4f}"
             )
 
     def joint_movement_test(
-        self, steps: List[Tuple[List[float], float]], ctrl_method: sdk.ArmFSMState
+        self,
+        steps: List[Tuple[List[float], float]],
+        ctrl_method: sdk.ArmFSMState,
+        file_prefix: str = "",
     ):
         """Test the joint movement. Each step should be a tuple of (joint_q, duration)"""
 
         assert ctrl_method in [sdk.ArmFSMState.LOWCMD, sdk.ArmFSMState.JOINTCTRL]
+
+        arm = sdk.ArmInterface(hasGripper=True)
+        arm.loopOn()
+        arm.backToStart()
+        arm.loopOff()
 
         for k, (joint_q, duration) in enumerate(steps):
             arm = sdk.ArmInterface(hasGripper=True)
@@ -196,18 +201,29 @@ dq var: {avg_dq_noise:.4f} tau var: {avg_tau_noise:.4f}"
                 duration=duration,
                 ctrl_method=ctrl_method,
             )
-            ref_traj.save_frames(
-                f"{self.data_dir}/{str(ctrl_method).split('.')[-1].lower()}_movement{k}_reference.json"
-            )
+            if file_prefix == "":
+                file_prefix = str(ctrl_method).split(".")[-1].lower()
+
+            ref_traj.save_frames(f"{self.data_dir}/{file_prefix}_reference{k}.json")
             time.sleep(0.5)
-            tracked_traj.save_frames(
-                f"{self.data_dir}/{str(ctrl_method).split('.')[-1].lower()}_movement{k}.json"
-            )
-            
-    def joint_movement_replay(self, steps: List[Tuple[List[float], float]]):
-        """Replay the joint movement recorded by jointctrl in lowcmd. 
+            tracked_traj.save_frames(f"{self.data_dir}/{file_prefix}{k}.json")
+
+        arm = sdk.ArmInterface(hasGripper=True)
+        arm.loopOn()
+        arm.backToStart()
+        arm.loopOff()
+
+    def joint_movement_replay(
+        self, steps: List[Tuple[List[float], float]], file_prefix: str
+    ):
+        """Replay the joint movement recorded by jointctrl in lowcmd.
         joint_movement_test(steps, ctrl_method=sdk.ArmFSMState.JOINTCTRL) should be executed first
         """
+
+        arm = sdk.ArmInterface(hasGripper=True)
+        arm.loopOn()
+        arm.backToStart()
+        arm.loopOff()
 
         for k, (joint_q, duration) in enumerate(steps):
             arm = sdk.ArmInterface(hasGripper=True)
@@ -219,17 +235,40 @@ dq var: {avg_dq_noise:.4f} tau var: {avg_tau_noise:.4f}"
             )
 
             os.makedirs(self.data_dir, exist_ok=True)
-            jointctrl_traj = Trajectory(file_name=f"{self.data_dir}/jointctrl_movement{k}.json")
-            jointctrl_traj.save_frames(f"{self.data_dir}/lowcmd_movement{k}_reference.json")
-            tracked_traj = pt.replay_traj(jointctrl_traj, ctrl_method=sdk.ArmFSMState.LOWCMD, back_to_start=False, start_from_home=False)
-            tracked_traj.save_frames(
-                f"{self.data_dir}/lowcmd_movement{k}.json"
+            tracked_traj = Trajectory(
+                file_name=f"{self.data_dir}/{file_prefix}{k}.json"
             )
+            tracked_traj.update_joint_dq()
+            tracked_traj.apply_moving_average(["joint_dq", "joint_tau"])
+            tracked_traj.smoothen_joint_dq_start_end()
+            tracked_traj.update_joint_tau()
+            # length = len(lowcmd_traj.np_arrays["timestamps"])
+            # lowcmd_traj = Trajectory(file_name=f"{self.data_dir}/lowcmd_reference{k}.json")
+            # timestamps = tracked_traj.np_arrays["timestamps"]
+            # interp_traj = lowcmd_traj.interp_traj(timestamps)
+            # tracked_traj.np_arrays["joint_dq"] = interp_traj.np_arrays["joint_dq"]
+            # tracked_traj.np_arrays["joint_q"] = interp_traj.np_arrays["joint_q"]
+            # tracked_traj.np_arrays["joint_tau"] = interp_traj.np_arrays["joint_tau"]
+
+            tracked_traj.save_frames(f"{self.data_dir}/replay_reference{k}.json")
+            tracked_traj = pt.replay_traj(
+                tracked_traj,
+                ctrl_method=sdk.ArmFSMState.LOWCMD,
+                back_to_start=False,
+                start_from_home=False,
+            )
+            tracked_traj.save_frames(f"{self.data_dir}/replay{k}.json")
+
+        arm = sdk.ArmInterface(hasGripper=True)
+        arm.loopOn()
+        arm.backToStart()
+        arm.loopOff()
 
     def joint_movement_analysis(
         self,
         steps: List[Tuple[List[float], float]],
         ctrl_method: Optional[sdk.ArmFSMState] = None,
+        file_prefix: str = "",
     ):
         """Analyze the joint movement. Each step should be a tuple of (joint_q, duration).
         Assign ctrl_method for single method analysis. If None, analyze both methods.
@@ -239,11 +278,13 @@ dq var: {avg_dq_noise:.4f} tau var: {avg_tau_noise:.4f}"
         if ctrl_method in [sdk.ArmFSMState.LOWCMD, sdk.ArmFSMState.JOINTCTRL]:
             # Analyze results from single method
             for k, (joint_q, duration) in enumerate(steps):
+                if file_prefix == "":
+                    file_prefix = str(ctrl_method).split(".")[-1].lower()
                 reference_traj = Trajectory(
-                    file_name=f"{self.data_dir}/{str(ctrl_method).split('.')[-1].lower()}_movement{k}_reference.json"
+                    file_name=f"{self.data_dir}/{file_prefix}_reference{k}.json"
                 )
                 tracked_traj = Trajectory(
-                    file_name=f"{self.data_dir}/{str(ctrl_method).split('.')[-1].lower()}_movement{k}.json"
+                    file_name=f"{self.data_dir}/{file_prefix}{k}.json"
                 )
                 avg_delay, joint_wise_delay = reference_traj.calc_delay(tracked_traj)
                 tracked_traj.time_shift(float(-avg_delay))
@@ -260,20 +301,20 @@ dq var: {avg_dq_noise:.4f} tau var: {avg_tau_noise:.4f}"
                 joint_id = np.argmax(np.abs(diff_q)) + 1
 
                 lowcmd_reference_traj = Trajectory(
-                    file_name=f"{self.data_dir}/lowcmd_movement{k}_reference.json"
+                    file_name=f"{self.data_dir}/lowcmd_reference{k}.json"
                 )
                 lowcmd_tracked_traj = Trajectory(
-                    file_name=f"{self.data_dir}/lowcmd_movement{k}.json"
+                    file_name=f"{self.data_dir}/lowcmd{k}.json"
                 )
                 (
                     lowcmd_avg_delay,
                     lowcmd_joint_wise_delay,
                 ) = lowcmd_reference_traj.calc_delay(lowcmd_tracked_traj)
                 jointctrl_reference_traj = Trajectory(
-                    file_name=f"{self.data_dir}/jointctrl_movement{k}_reference.json"
+                    file_name=f"{self.data_dir}/jointctrl_reference{k}.json"
                 )
                 jointctrl_tracked_traj = Trajectory(
-                    file_name=f"{self.data_dir}/jointctrl_movement{k}.json"
+                    file_name=f"{self.data_dir}/jointctrl{k}.json"
                 )
                 (
                     joint_avg_delay,
@@ -282,17 +323,20 @@ dq var: {avg_dq_noise:.4f} tau var: {avg_tau_noise:.4f}"
                 print(
                     f"Step num: {k}, lowcmd delay: {lowcmd_avg_delay:.3f}, jointctrl delay: {joint_avg_delay:.3f}"
                 )
-                
-    
+
     def inverse_dynamic_analysis(self, traj: Trajectory):
         """Calculate inverse dynamic according to recorded trajectory"""
 
         calc_traj = traj.copy()
         calc_traj.update_joint_dq()
         calc_traj.update_joint_tau()
-        self.compare_traj(traj, calc_traj, traj_names=["recorded", "calculated", "difference"])
+        self.compare_traj(
+            traj, calc_traj, traj_names=["recorded", "calculated", "difference"]
+        )
 
-    def joint_movement_id_analysis(self, steps: List[Tuple[List[float], float]], ctrl_method: sdk.ArmFSMState):
+    def joint_movement_id_analysis(
+        self, steps: List[Tuple[List[float], float]], ctrl_method: sdk.ArmFSMState
+    ):
         """Analyze the inverse dynamic of joint movement. Each step should be a tuple of (joint_q, duration).
         Assign ctrl_method for single method analysis. If None, analyze both methods.
         Please make sure the joint movement test is done before calling this function.
@@ -301,6 +345,6 @@ dq var: {avg_dq_noise:.4f} tau var: {avg_tau_noise:.4f}"
         assert ctrl_method in [sdk.ArmFSMState.LOWCMD, sdk.ArmFSMState.JOINTCTRL]
         for k, (joint_q, duration) in enumerate(steps):
             tracked_traj = Trajectory(
-                file_name=f"{self.data_dir}/{str(ctrl_method).split('.')[-1].lower()}_movement{k}.json"
+                file_name=f"{self.data_dir}/{str(ctrl_method).split('.')[-1].lower()}{k}.json"
             )
             self.inverse_dynamic_analysis(tracked_traj)
