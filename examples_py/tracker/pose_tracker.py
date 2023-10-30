@@ -17,23 +17,29 @@ class PoseTracker:
     def __init__(
         self,
         arm: sdk.ArmInterface,
-        teleop_dt: float,
-        track_dt: float,
-        stiffness: Optional[float] = None,
+        input_dt: float,
+        record_dt: float,
+        kp: Optional[List[float]] = None,
+        kd: Optional[List[float]] = None,
     ):
         self.arm = arm
-        self.teleop_dt = teleop_dt
-        self.track_dt = track_dt
+        self.input_dt = input_dt
+        self.record_dt = record_dt
         self.tracked_frames: List[Frame] = []
         self.start_time = time.monotonic()
         self.arm_ctrl_dt = arm._ctrlComp.dt
-        self.stiffness = stiffness
+        if kp is None:
+            kp = [20.0, 30.0, 30.0, 20.0, 15.0, 10.0, 20.0]
+        if kd is None:
+            kd = [2000.0, 2000.0, 2000.0, 2000.0, 2000.0, 2000.0, 2000.0]
+        self.kp = kp
+        self.kd = kd
         assert (
-            self.track_dt % self.arm_ctrl_dt == 0
-        ), f"track_dt should be a multiple of arm._ctrlComp.dt {arm._ctrlComp.dt}"
+            self.record_dt % self.arm_ctrl_dt == 0
+        ), f"record_dt should be a multiple of arm._ctrlComp.dt {arm._ctrlComp.dt}"
         assert (
-            self.teleop_dt % self.track_dt == 0
-        ), f"teleop_dt should be a multiple of track_dt {track_dt}"
+            self.input_dt % self.record_dt == 0
+        ), f"input_dt should be a multiple of record_dt {record_dt}"
         self.spacemouse_queue: Queue[npt.NDArray[np.float64]] = Queue()
 
     def reset(self):
@@ -130,7 +136,7 @@ class PoseTracker:
                     # Unitree arm direction is in the format of (roll pitch yaw x y z gripper)
 
                     new_start_time = time.monotonic()
-                    ctrl_frame_num = int(self.teleop_dt / self.arm_ctrl_dt)
+                    ctrl_frame_num = int(self.input_dt / self.arm_ctrl_dt)
                     for k in range(ctrl_frame_num):
                         interp_directions = (
                             directions * k + prev_directions * (ctrl_frame_num - k)
@@ -138,7 +144,7 @@ class PoseTracker:
                         assert all(abs(interp_directions)) <= 1
                         self.arm.cartesianCtrlCmd(interp_directions, oriSpeed, posSpeed)
 
-                        if k % int(self.track_dt / self.arm_ctrl_dt) == 0:
+                        if k % int(self.record_dt / self.arm_ctrl_dt) == 0:
                             self.track_frame()
 
                         # Sleep `remaining_time` to match with reference time
@@ -177,7 +183,7 @@ class PoseTracker:
         while time.monotonic() - self.start_time < duration:
             print(f"Time elapsed: {time.monotonic() - self.start_time:.03f}s", end="\r")
             self.track_frame()
-            time.sleep(self.track_dt)
+            time.sleep(self.record_dt)
 
         self.arm.loopOff()
 
@@ -211,17 +217,8 @@ class PoseTracker:
             )
         elif ctrl_method == sdk.ArmFSMState.LOWCMD:
             self.arm.setFsmLowcmd()
-            default_kp = np.array([20.0, 30.0, 30.0, 20.0, 15.0, 10.0, 20.0])
-            default_kd = np.array(
-                [2000.0, 2000.0, 2000.0, 2000.0, 2000.0, 2000.0, 2000.0]
-            )
-            # default_kd = np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
-            if ctrl_method == sdk.ArmFSMState.LOWCMD:
-                assert (
-                    self.stiffness is not None and 0 < self.stiffness <= 2
-                ), "stiffness should be initialized in (0, 2]"
             self.arm.lowcmd.setControlGain(
-                self.stiffness * default_kp, default_kd.tolist()
+                self.kp, self.kd
             )
         init_start_time = time.monotonic()
 
@@ -365,7 +362,7 @@ class PoseTracker:
 
             set_gripper_cmd_end_time = time.monotonic()
 
-            if elapsed_time / self.track_dt >= len(self.tracked_frames):
+            if elapsed_time / self.record_dt >= len(self.tracked_frames):
                 self.track_frame()
 
             ctrl_frame_num += 1
@@ -414,7 +411,7 @@ sleep: {sleep_end_time - sendrecv_end_time:.5f}",
         target_gripper_q = np.array(end_frame.gripper_q)
         duration = end_frame.timestamp - start_frame.timestamp
         timestamps = start_frame.timestamp + np.linspace(
-            0, duration, int(duration / self.teleop_dt)
+            0, duration, int(duration / self.input_dt)
         )
         traj = Trajectory(timestamps=timestamps)
         traj.np_arrays["joint_q"] = np.linspace(

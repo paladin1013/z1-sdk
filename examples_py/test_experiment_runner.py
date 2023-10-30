@@ -1,32 +1,31 @@
 from tracker import ExperimentRunner, PoseTracker
 import matplotlib.pyplot as plt
 import unitree_arm_interface as sdk
+import hydra
+from omegaconf import OmegaConf
+
+
+@hydra.main(config_path="config", config_name="teleop_replay", version_base="1.2")
+def main(conf: OmegaConf):
+    runner: ExperimentRunner = hydra.utils.instantiate(conf)
+    # runner.record_teleop_demo()
+    runner.replay_teleop_demo()
+    runner.analyze_replay_precision()
+    plt.show()
+
 
 if __name__ == "__main__":
-    runner = ExperimentRunner(
-        teleop_dt=0.02,
-        track_dt=0.002,
-        demo_duration=10,
-        replay_duration=10,
-        trial_id=7,
-        # replay_speeds=[0.2, 0.5, 1.0],
-        replay_speeds=[1],
-        stiffnesses=[1],
-        # kp_scales=[1],
-        # kd_scales=[0.5, 0.75, 1.0, 1.5]
-    )
-    runner.record_teleop_demo()
-    runner.sweep_params()
-    runner.analyze_precision()
-    runner.sweep_params()
-    runner.analyze_precision()
+    main()
+    # runner.record_teleop_demo()
+    # runner.sweep_params()
+    # runner.analyze_precision()
     
     # steps = [
     #     # ([0.5, 0.0, 0.0, 0.0, 0.0, 0.0], 5.0),
     #     # ([0.0, 0.0, 0.0, 0.0, 0.0, 0.0], 5.0),
     #     ([0.0, 0.0, -1.25, 0.0, 0.0, 0.0], 5.0),
-    #     # ([0.0, 1.25, -1.25, 0.0, 0.0, 0.0], 5.0),
-    #     # ([0.0, 0.0, -1.25, 0.0, 0.0, 0.0], 5.0),
+    #     ([0.0, 1.25, -1.25, 0.0, 0.0, 0.0], 5.0),
+    #     ([0.0, 0.0, -1.25, 0.0, 0.0, 0.0], 5.0),
     #     ([0.0, 0.0, 0.0, 0.0, 0.0, 0.0], 5.0),
     # ]
     # runner.joint_movement_test(steps, ctrl_method=sdk.ArmFSMState.JOINTCTRL)
@@ -40,4 +39,4 @@ if __name__ == "__main__":
     # runner.joint_movement_id_analysis(steps, ctrl_method=sdk.ArmFSMState.LOWCMD)   
     
 
-    plt.show()
+    # plt.show()

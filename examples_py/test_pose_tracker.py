@@ -10,18 +10,18 @@ import matplotlib.pyplot as plt
 
 if __name__ == "__main__":
     duration = 10
-    track_dt = 0.002
+    record_dt = 0.002
     trial = 7
     replay_speed = 0.2
     truncate_time = 10
 
-    data_dir = f"logs/trajectories/duration{duration}_dt{track_dt}_trial{trial}"
+    data_dir = f"logs/trajectories/duration{duration}_dt{record_dt}_trial{trial}"
 
     os.makedirs(data_dir, exist_ok=True)
 
     arm = sdk.ArmInterface(hasGripper=True)
 
-    pt = PoseTracker(arm, teleop_dt=0.02, track_dt=track_dt, stiffness=1)
+    pt = PoseTracker(arm, input_dt=0.02, record_dt=record_dt, stiffness=1)
 
     tracked_traj = pt.start_teleop_tracking(duration)
     tracked_traj.save_frames(f"{data_dir}/tracked.json")

@@ -1,0 +1,25 @@
+record_dt: 0.002
+input_dt: 0.02
+
+kp_scale: 1.
+kp_base:
+  - 20.0
+  - 30.0
+  - 30.0
+  - 20.0
+  - 15.0
+  - 10.0
+  - 20.0
+
+kd_scale: 1.
+kd_base: 
+  - 2000.
+  - 2000.
+  - 2000.
+  - 2000.
+  - 2000.
+  - 2000.
+  - 2000.
+
+_target_: tracker.experiment_runner.ExperimentRunner
+

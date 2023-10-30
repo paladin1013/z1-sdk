@@ -1,0 +1,7 @@
+defaults:
+  - _self_
+  - common
+demo_duration: 10.
+replay_duration: 20.
+replay_speed: 0.5
+data_dir: logs/teleop_replay

@@ -2,7 +2,7 @@ import numpy as np
 import numpy.typing as npt
 import json
 from typing import List, Dict, Optional, Tuple, cast
-from dataclasses import dataclass, asdict, field
+from dataclasses import dataclass, field
 import matplotlib.pyplot as plt
 from matplotlib.axes import Axes
 from matplotlib.figure import Figure
@@ -71,8 +71,11 @@ class Trajectory:
         frames: Optional[List[Frame]] = None,
         file_name: Optional[str] = None,
         timestamps: Optional[npt.NDArray[np.float64]] = None,
+        meta_data: Optional[Dict[str, float]] = None,
     ):
         self.np_arrays: Dict[str, npt.NDArray[np.float64]] = {}
+        self.meta_data: Dict[str, float] = meta_data or {}
+        """For parameters of the current trajectory"""
 
         if frames is not None:
             frame_num = len(frames)
@@ -89,16 +92,24 @@ class Trajectory:
         elif file_name is not None:
             with open(file_name, "r") as f:
                 json_data = json.load(f)
-                frame_num = len(json_data)
-                self.np_arrays["timestamps"] = np.zeros(frame_num, dtype=np.float64)
-                for attr_name in Frame.LIST_ATTRS:
-                    self.np_arrays[attr_name] = np.zeros(
-                        (frame_num, Frame.LIST_ATTRS[attr_name]), dtype=np.float64
-                    )
-                for k, frame in enumerate(json_data):
-                    self.np_arrays["timestamps"][k] = frame["timestamp"]
+                
+                if type(json_data) is dict: # Load trajectory with meta data
+                    self.meta_data = json_data["meta_data"]
+                    for key, val in json_data.items():
+                        if key != "meta_data":
+                            self.np_arrays[key] = np.array(val)
+                            
+                elif type(json_data) is list: # Load frame list only
+                    frame_num = len(json_data)
+                    self.np_arrays["timestamps"] = np.zeros(frame_num, dtype=np.float64)
                     for attr_name in Frame.LIST_ATTRS:
-                        self.np_arrays[attr_name][k] = np.array(frame[attr_name])
+                        self.np_arrays[attr_name] = np.zeros(
+                            (frame_num, Frame.LIST_ATTRS[attr_name]), dtype=np.float64
+                        )
+                    for k, frame in enumerate(json_data):
+                        self.np_arrays["timestamps"][k] = frame["timestamp"]
+                        for attr_name in Frame.LIST_ATTRS:
+                            self.np_arrays[attr_name][k] = np.array(frame[attr_name])
 
         elif timestamps is not None:
             self.np_arrays["timestamps"] = timestamps
@@ -145,6 +156,15 @@ class Trajectory:
                 frame_dicts.append(frame_dict)
             json.dump(frame_dicts, f)
 
+    def save_traj(self, file_name: str, meta_data: Dict[str, float]):
+        """Save the trajectory to a json file, with meta data in the beginning"""
+        with open(file_name, "w") as f:
+            data = {}
+            data["meta_data"] = meta_data
+            for key, val in self.np_arrays.items():
+                data[key] = val.tolist()
+            json.dump(data, f)
+    
     def is_initialized(self, attr_name):
         assert attr_name in Frame.LIST_ATTRS
         return self.np_arrays[attr_name].any()
