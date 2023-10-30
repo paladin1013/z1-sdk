@@ -1,0 +1,19 @@
+defaults:
+  - runner: common
+  - _self_
+
+runner:
+  data_dir: logs/joint_movement
+
+steps:
+  - joint_pos: [0.0, 0.0, -1.25, 0.0, 0.0, 0.0]
+    duration: 5.0
+  - joint_pos: [0.0, 1.25, -1.25, 0.0, 0.0, 0.0]
+    duration: 5.0
+  - joint_pos: [0.0, 0.0, -1.25, 0.0, 0.0, 0.0]
+    duration: 5.0  
+  - joint_pos: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    duration: 5.0
+
+# ctrl_method: jointctrl
+ctrl_method: lowcmd

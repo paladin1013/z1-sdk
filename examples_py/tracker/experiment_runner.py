@@ -19,9 +19,6 @@ class ExperimentRunner:
         data_dir: str,
         input_dt: float = 0.02,
         record_dt: float = 0.002,
-        demo_duration: float = 10,
-        replay_duration: float = 10,
-        replay_speed: float = 1.0,
         kp_scale: float = 1.0,
         kp_base: Optional[List[float]] = None,
         kd_scale: float = 1.0,
@@ -29,10 +26,7 @@ class ExperimentRunner:
     ):
         self.input_dt = input_dt
         self.record_dt = record_dt
-        self.demo_duration = demo_duration
-        self.replay_duration = replay_duration
         self.data_dir = data_dir
-        self.replay_speed = replay_speed
         if kp_base is None:
             kp_base = [20.0, 30.0, 30.0, 20.0, 15.0, 10.0, 20.0]
         if kd_base is None:
@@ -43,15 +37,15 @@ class ExperimentRunner:
         self.kd_base = list(kd_base)
         self.kd_scale = kd_scale
 
-    def record_teleop_demo(self):
+    def record_teleop_demo(self, demo_duration: float):
         arm = sdk.ArmInterface(hasGripper=True)
         
         pt = PoseTracker(arm, input_dt=self.input_dt, record_dt=self.record_dt)
-        tracked_traj = pt.start_teleop_tracking(self.demo_duration)
+        tracked_traj = pt.start_teleop_tracking(demo_duration)
         os.makedirs(self.data_dir, exist_ok=True)
         tracked_traj.save_traj(f"{self.data_dir}/teleop.json", meta_data=self.__dict__)
 
-    def replay_teleop_demo(self):
+    def replay_teleop_demo(self, replay_duration: float, replay_speed: float = 1):
         arm = sdk.ArmInterface(hasGripper=True)
         pt = PoseTracker(
             arm,
@@ -62,9 +56,9 @@ class ExperimentRunner:
         )
         teleop_traj = Trajectory(file_name=f"{self.data_dir}/teleop.json")
         reference_traj = teleop_traj.copy()
-        reference_traj.rescale_speed(self.replay_speed)
+        reference_traj.rescale_speed(replay_speed)
         reference_traj.apply_moving_average(["joint_dq", "joint_tau"])
-        reference_traj.truncate(self.replay_duration)
+        reference_traj.truncate(replay_duration)
         reference_traj.save_traj(f"{self.data_dir}/reference.json", meta_data=self.__dict__)
         tracked_traj = pt.replay_traj(reference_traj, ctrl_method=sdk.ArmFSMState.LOWCMD)
         tracked_traj.save_traj(f"{self.data_dir}/replay.json", meta_data=self.__dict__)
@@ -258,9 +252,9 @@ dq var: {avg_dq_noise:.4f} tau var: {avg_tau_noise:.4f}"
             if file_prefix == "":
                 file_prefix = str(ctrl_method).split(".")[-1].lower()
 
-            ref_traj.save_frames(f"{self.data_dir}/{file_prefix}_reference{k}.json")
+            ref_traj.save_traj(f"{self.data_dir}/{file_prefix}_reference{k}.json", meta_data=self.__dict__)
             time.sleep(0.5)
-            tracked_traj.save_frames(f"{self.data_dir}/{file_prefix}{k}.json")
+            tracked_traj.save_traj(f"{self.data_dir}/{file_prefix}{k}.json", meta_data=self.__dict__)
 
         arm = sdk.ArmInterface(hasGripper=True)
         arm.loopOn()
@@ -305,14 +299,14 @@ dq var: {avg_dq_noise:.4f} tau var: {avg_tau_noise:.4f}"
             # tracked_traj.np_arrays["joint_q"] = interp_traj.np_arrays["joint_q"]
             # tracked_traj.np_arrays["joint_tau"] = interp_traj.np_arrays["joint_tau"]
 
-            tracked_traj.save_frames(f"{self.data_dir}/replay_reference{k}.json")
+            tracked_traj.save_traj(f"{self.data_dir}/replay_reference{k}.json", meta_data=self.__dict__)
             tracked_traj = pt.replay_traj(
                 tracked_traj,
                 ctrl_method=sdk.ArmFSMState.LOWCMD,
                 back_to_start=False,
                 start_from_home=False,
             )
-            tracked_traj.save_frames(f"{self.data_dir}/replay{k}.json")
+            tracked_traj.save_traj(f"{self.data_dir}/replay{k}.json", meta_data=self.__dict__)
 
         arm = sdk.ArmInterface(hasGripper=True)
         arm.loopOn()

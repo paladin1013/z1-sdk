@@ -204,12 +204,11 @@ class Trajectory:
             for k in range(dim):
                 vals = self.np_arrays[attr_name][:, k].squeeze()
                 fill_value = "extrapolate"
-                fill_value = cast(float, fill_value)  # To make mypy happy
                 f_k = interp1d(
                     timestamps,
                     vals,
                     bounds_error=False,
-                    fill_value=fill_value,
+                    fill_value=fill_value, # type: ignore
                     assume_sorted=True,
                 )
                 self.interp_functions[attr_name].append(f_k)
