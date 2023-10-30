@@ -13,6 +13,18 @@ import numpy.typing as npt
 from queue import Queue
 
 
+def precise_sleep_until(target: float, slack_time: float = 0.001):
+    remaining_time = target - time.monotonic()
+    if remaining_time < 0:
+        return
+    if (remaining_time - slack_time) > 0:
+        time.sleep(remaining_time - slack_time)
+    while target > time.monotonic():
+        # spin lock
+        pass
+    return
+
+
 class PoseTracker:
     def __init__(
         self,
@@ -202,12 +214,12 @@ class PoseTracker:
         self.arm.setFsm(sdk.ArmFSMState.PASSIVE)
         if start_from_home:
             self.arm.backToStart()
+            self.arm.setArmCmd(
+                np.zeros(6, dtype=np.float64),
+                np.zeros(6, dtype=np.float64),
+                np.zeros(6, dtype=np.float64),
+            )
 
-        self.arm.setArmCmd(
-            np.zeros(6, dtype=np.float64),
-            np.zeros(6, dtype=np.float64),
-            np.zeros(6, dtype=np.float64),
-        )
         if ctrl_method == sdk.ArmFSMState.JOINTCTRL:
             self.arm.startTrack(sdk.ArmFSMState.JOINTCTRL)
             self.arm.setArmCmd(
@@ -217,9 +229,7 @@ class PoseTracker:
             )
         elif ctrl_method == sdk.ArmFSMState.LOWCMD:
             self.arm.setFsmLowcmd()
-            self.arm.lowcmd.setControlGain(
-                self.kp, self.kd
-            )
+            self.arm.lowcmd.setControlGain(self.kp, self.kd)
         init_start_time = time.monotonic()
 
         while True:
@@ -253,6 +263,7 @@ class PoseTracker:
                 )
                 return False
 
+    # @profile
     def replay_traj(
         self,
         trajectory: Trajectory,
@@ -312,13 +323,16 @@ class PoseTracker:
         )
         while True:
             elapsed_time = time.monotonic() - self.start_time
-            # print(f"Elapsed time: {elapsed_time:.3f}s", end="\r")
+            ctrl_frame_num += 1
+            target_timestamp = ctrl_frame_num * self.arm_ctrl_dt
+
             # Find the frame right after elapsed time
             for k in range(traj_frame_num, trajectory.np_arrays["timestamps"].shape[0]):
-                if trajectory.np_arrays["timestamps"][k] > elapsed_time:
+                if trajectory.np_arrays["timestamps"][k] > target_timestamp:
                     traj_frame_num = k
                     break
             else:
+                # Return the recorded trajectory
                 print(f"\nFinish replaying trajectory!")
                 time.sleep(0.5)
                 if back_to_start:
@@ -331,10 +345,11 @@ class PoseTracker:
                     )
                     self.arm.loopOff()
                 return Trajectory(frames=self.tracked_frames)
+
             loop_start_time = time.monotonic()
             target_frame = trajectory.interp_single_frame(
                 # elapsed_time, traj_frame_num, method="scipy", interp_attrs=["joint_q", "gripper_q"]
-                elapsed_time,
+                target_timestamp,
                 traj_frame_num,
                 method="linear",
             )
@@ -342,13 +357,13 @@ class PoseTracker:
 
             if ctrl_method == sdk.ArmFSMState.LOWCMD:
                 joint_tau = np.array(target_frame.joint_tau)
-
                 self.arm.setArmCmd(
                     np.array(target_frame.joint_q),
                     np.array(target_frame.joint_dq),
                     joint_tau,
                 )
                 self.arm.setGripperCmd(target_frame.gripper_q[0], 0.0, 0.0)
+
             elif ctrl_method == sdk.ArmFSMState.JOINTCTRL:
                 # Using joint_dq for speed normalization
                 joint_direction = np.array(target_frame.joint_dq) / np.linalg.norm(
@@ -360,30 +375,23 @@ class PoseTracker:
                 direction = np.append(joint_direction, gripper_direction)
                 self.arm.jointCtrlCmd(direction, np.linalg.norm(target_frame.joint_dq))
 
-            set_gripper_cmd_end_time = time.monotonic()
+            # Maintain a control frequency of self.arm_ctrl_dt and reduce accumulated error
 
-            if elapsed_time / self.record_dt >= len(self.tracked_frames):
-                self.track_frame()
-
-            ctrl_frame_num += 1
+            precise_sleep_until(self.start_time + target_timestamp)
+            sleep_end_time = time.monotonic()
 
             if ctrl_method == sdk.ArmFSMState.LOWCMD:
                 self.arm.sendRecv()
             sendrecv_end_time = time.monotonic()
 
-            # Maintain a control frequency of self.arm_ctrl_dt and reduce accumulated error
-            reference_time = self.start_time + (ctrl_frame_num + 1) * self.arm_ctrl_dt
-            remaining_time = max(0, reference_time - time.monotonic())
-
-            time.sleep(remaining_time)
-
-            sleep_end_time = time.monotonic()
+            if target_timestamp / self.record_dt >= len(self.tracked_frames):
+                self.track_frame()
 
             print(
                 f"Elapsed: {sleep_end_time - self.start_time:>5.3f}, interp: {interp_end_time - loop_start_time:.5f}, \
-sendrecv: {sendrecv_end_time - set_gripper_cmd_end_time:.5f}, \
-sleep: {sleep_end_time - sendrecv_end_time:.5f}",
-                end="\r",
+sleep: {sleep_end_time - interp_end_time:.5f}, \
+sendrecv: {sendrecv_end_time - sleep_end_time:.5f}",
+                # end="\r",
             )
 
     # def move_to_target(self, target_frame: Frame, method: sdk.ArmFSMState, duration: float = 5.0):

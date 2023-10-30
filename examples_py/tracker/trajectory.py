@@ -92,14 +92,14 @@ class Trajectory:
         elif file_name is not None:
             with open(file_name, "r") as f:
                 json_data = json.load(f)
-                
-                if type(json_data) is dict: # Load trajectory with meta data
+
+                if type(json_data) is dict:  # Load trajectory with meta data
                     self.meta_data = json_data["meta_data"]
                     for key, val in json_data.items():
                         if key != "meta_data":
                             self.np_arrays[key] = np.array(val)
-                            
-                elif type(json_data) is list: # Load frame list only
+
+                elif type(json_data) is list:  # Load frame list only
                     frame_num = len(json_data)
                     self.np_arrays["timestamps"] = np.zeros(frame_num, dtype=np.float64)
                     for attr_name in Frame.LIST_ATTRS:
@@ -164,7 +164,7 @@ class Trajectory:
             for key, val in self.np_arrays.items():
                 data[key] = val.tolist()
             json.dump(data, f)
-    
+
     def is_initialized(self, attr_name):
         assert attr_name in Frame.LIST_ATTRS
         return self.np_arrays[attr_name].any()
@@ -208,7 +208,7 @@ class Trajectory:
                     timestamps,
                     vals,
                     bounds_error=False,
-                    fill_value=fill_value, # type: ignore
+                    fill_value=fill_value,  # type: ignore
                     assume_sorted=True,
                 )
                 self.interp_functions[attr_name].append(f_k)
@@ -219,7 +219,7 @@ class Trajectory:
         next_frame_idx: Optional[int] = None,
         method: str = "linear",
         interp_attrs: List[str] = list(Frame.LIST_ATTRS.keys()),
-    ):
+    ) -> Frame:
         """next_frame_idx is the frame number that is the first to have a larger timestamp than new_timestamp.
         Will return the self.np_arrays["timestamps"][0] if next_frame_idx = 0
         Will return the self.np_arrays["timestamps"][-1] if next_frame_idx >= len(self.np_arrays["timestamps"])

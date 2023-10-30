@@ -31,7 +31,7 @@ class ExperimentRunner:
             kp_base = [20.0, 30.0, 30.0, 20.0, 15.0, 10.0, 20.0]
         if kd_base is None:
             kd_base = [2000.0, 2000.0, 2000.0, 2000.0, 2000.0, 2000.0, 2000.0]
-        
+
         self.kp_base = list(kp_base)
         self.kp_scale = kp_scale
         self.kd_base = list(kd_base)
@@ -39,7 +39,7 @@ class ExperimentRunner:
 
     def record_teleop_demo(self, demo_duration: float):
         arm = sdk.ArmInterface(hasGripper=True)
-        
+
         pt = PoseTracker(arm, input_dt=self.input_dt, record_dt=self.record_dt)
         tracked_traj = pt.start_teleop_tracking(demo_duration)
         os.makedirs(self.data_dir, exist_ok=True)
@@ -51,18 +51,22 @@ class ExperimentRunner:
             arm,
             input_dt=self.input_dt,
             record_dt=self.record_dt,
-            kp=[self.kp_scale*val for val in self.kp_base],
-            kd=[self.kd_scale*val for val in self.kd_base],
+            kp=[self.kp_scale * val for val in self.kp_base],
+            kd=[self.kd_scale * val for val in self.kd_base],
         )
         teleop_traj = Trajectory(file_name=f"{self.data_dir}/teleop.json")
         reference_traj = teleop_traj.copy()
         reference_traj.rescale_speed(replay_speed)
         reference_traj.apply_moving_average(["joint_dq", "joint_tau"])
         reference_traj.truncate(replay_duration)
-        reference_traj.save_traj(f"{self.data_dir}/reference.json", meta_data=self.__dict__)
-        tracked_traj = pt.replay_traj(reference_traj, ctrl_method=sdk.ArmFSMState.LOWCMD)
+        reference_traj.save_traj(
+            f"{self.data_dir}/reference.json", meta_data=self.__dict__
+        )
+        tracked_traj = pt.replay_traj(
+            reference_traj, ctrl_method=sdk.ArmFSMState.LOWCMD
+        )
         tracked_traj.save_traj(f"{self.data_dir}/replay.json", meta_data=self.__dict__)
-    
+
     def analyze_replay_precision(self):
         reference_traj = Trajectory(file_name=f"{self.data_dir}/reference.json")
         replay_traj = Trajectory(file_name=f"{self.data_dir}/replay.json")
@@ -70,9 +74,9 @@ class ExperimentRunner:
         replay_traj.time_shift(float(-avg_delay))
         diff_traj, fig = self.compare_traj(reference_traj, replay_traj)
 
-        joint_wise_diff = np.sum(
-            np.abs(diff_traj.np_arrays["joint_q"]), axis=0
-        ) / len(diff_traj.np_arrays["joint_q"])
+        joint_wise_diff = np.sum(np.abs(diff_traj.np_arrays["joint_q"]), axis=0) / len(
+            diff_traj.np_arrays["joint_q"]
+        )
         avg_diff = np.mean(joint_wise_diff)
         joint_diff_str = ", ".join([f"{diff:.4f}" for diff in joint_wise_diff])
 
@@ -82,9 +86,10 @@ class ExperimentRunner:
         avg_tau_noise = np.mean(var_frame.joint_tau)
 
         print(
-            f"Speed: {self.replay_speed:.1f} kp_scale: {self.kp_scale: .1f} Delay: {avg_delay:.3f} Average difference: {avg_diff:.4f} \
+            f"kp_scale: {self.kp_scale: .1f} Delay: {avg_delay:.3f} Average difference: {avg_diff:.4f} \
 dq var: {avg_dq_noise:.4f} tau var: {avg_tau_noise:.4f}"
-        )        
+        )
+
     # def sweep_params(self, arguments: Dict[str, List[float]]):
     #     """Will sweep parameters in self.replay_speeds and self.stiffnesses and record trajectories"""
 
@@ -142,38 +147,36 @@ dq var: {avg_dq_noise:.4f} tau var: {avg_tau_noise:.4f}"
     #         print(
     #             f"Speed: {replay_speed:.1f} Stiffness: {stiffness: .1f} Average delay: {avg_delay:.3f}, Joint-wise delay: {joint_delay_str}"
     #         )
-    
 
-#     def analyze_precision(self):
-#         """After sweeping parameters, analyze the precision of each trajectory."""
+    #     def analyze_precision(self):
+    #         """After sweeping parameters, analyze the precision of each trajectory."""
 
-#         for (
-#             replay_speed,
-#             stiffness,
-#             reference_traj,
-#             replay_traj,
-#         ) in self.load_experiment_results():
-#             # Compare reference traj with replay traj
-#             avg_delay, joint_wise_delay = reference_traj.calc_delay(replay_traj)
-#             replay_traj.time_shift(float(-avg_delay))
-#             diff_traj, fig = self.compare_traj(reference_traj, replay_traj)
+    #         for (
+    #             replay_speed,
+    #             stiffness,
+    #             reference_traj,
+    #             replay_traj,
+    #         ) in self.load_experiment_results():
+    #             # Compare reference traj with replay traj
+    #             avg_delay, joint_wise_delay = reference_traj.calc_delay(replay_traj)
+    #             replay_traj.time_shift(float(-avg_delay))
+    #             diff_traj, fig = self.compare_traj(reference_traj, replay_traj)
 
-#             joint_wise_diff = np.sum(
-#                 np.abs(diff_traj.np_arrays["joint_q"]), axis=0
-#             ) / len(diff_traj.np_arrays["joint_q"])
-#             avg_diff = np.mean(joint_wise_diff)
-#             joint_diff_str = ", ".join([f"{diff:.4f}" for diff in joint_wise_diff])
+    #             joint_wise_diff = np.sum(
+    #                 np.abs(diff_traj.np_arrays["joint_q"]), axis=0
+    #             ) / len(diff_traj.np_arrays["joint_q"])
+    #             avg_diff = np.mean(joint_wise_diff)
+    #             joint_diff_str = ", ".join([f"{diff:.4f}" for diff in joint_wise_diff])
 
-#             var_frame = replay_traj.calc_local_variance()
+    #             var_frame = replay_traj.calc_local_variance()
 
-#             avg_dq_noise = np.mean(var_frame.joint_dq)
-#             avg_tau_noise = np.mean(var_frame.joint_tau)
+    #             avg_dq_noise = np.mean(var_frame.joint_dq)
+    #             avg_tau_noise = np.mean(var_frame.joint_tau)
 
-#             print(
-#                 f"Speed: {replay_speed:.1f} Stiffness: {stiffness: .1f} Delay: {avg_delay:.3f} Average difference: {avg_diff:.4f} \
-# dq var: {avg_dq_noise:.4f} tau var: {avg_tau_noise:.4f}"
-#             )
-
+    #             print(
+    #                 f"Speed: {replay_speed:.1f} Stiffness: {stiffness: .1f} Delay: {avg_delay:.3f} Average difference: {avg_diff:.4f} \
+    # dq var: {avg_dq_noise:.4f} tau var: {avg_tau_noise:.4f}"
+    #             )
 
     def compare_traj(
         self,
@@ -217,7 +220,6 @@ dq var: {avg_dq_noise:.4f} tau var: {avg_tau_noise:.4f}"
                 axes[i][j].set_xlim(start_time, end_time)
         return diff_traj, fig
 
-
     def joint_movement_test(
         self,
         steps: List[Tuple[List[float], float]],
@@ -239,8 +241,8 @@ dq var: {avg_dq_noise:.4f} tau var: {avg_tau_noise:.4f}"
                 arm,
                 input_dt=self.input_dt,
                 record_dt=self.record_dt,
-                kp=[self.kp_scale*val for val in self.kp_base],
-                kd=[self.kd_scale*val for val in self.kd_base],
+                kp=[self.kp_scale * val for val in self.kp_base],
+                kd=[self.kd_scale * val for val in self.kd_base],
             )
             os.makedirs(self.data_dir, exist_ok=True)
             ref_traj, tracked_traj = pt.go_to_joint_pos(
@@ -252,9 +254,14 @@ dq var: {avg_dq_noise:.4f} tau var: {avg_tau_noise:.4f}"
             if file_prefix == "":
                 file_prefix = str(ctrl_method).split(".")[-1].lower()
 
-            ref_traj.save_traj(f"{self.data_dir}/{file_prefix}_reference{k}.json", meta_data=self.__dict__)
+            ref_traj.save_traj(
+                f"{self.data_dir}/{file_prefix}_reference{k}.json",
+                meta_data=self.__dict__,
+            )
             time.sleep(0.5)
-            tracked_traj.save_traj(f"{self.data_dir}/{file_prefix}{k}.json", meta_data=self.__dict__)
+            tracked_traj.save_traj(
+                f"{self.data_dir}/{file_prefix}{k}.json", meta_data=self.__dict__
+            )
 
         arm = sdk.ArmInterface(hasGripper=True)
         arm.loopOn()
@@ -279,8 +286,8 @@ dq var: {avg_dq_noise:.4f} tau var: {avg_tau_noise:.4f}"
                 arm,
                 input_dt=self.input_dt,
                 record_dt=self.record_dt,
-                kp=[self.kp_scale*val for val in self.kp_base],
-                kd=[self.kd_scale*val for val in self.kd_base],
+                kp=[self.kp_scale * val for val in self.kp_base],
+                kd=[self.kd_scale * val for val in self.kd_base],
             )
 
             os.makedirs(self.data_dir, exist_ok=True)
@@ -299,14 +306,18 @@ dq var: {avg_dq_noise:.4f} tau var: {avg_tau_noise:.4f}"
             # tracked_traj.np_arrays["joint_q"] = interp_traj.np_arrays["joint_q"]
             # tracked_traj.np_arrays["joint_tau"] = interp_traj.np_arrays["joint_tau"]
 
-            tracked_traj.save_traj(f"{self.data_dir}/replay_reference{k}.json", meta_data=self.__dict__)
+            tracked_traj.save_traj(
+                f"{self.data_dir}/replay_reference{k}.json", meta_data=self.__dict__
+            )
             tracked_traj = pt.replay_traj(
                 tracked_traj,
                 ctrl_method=sdk.ArmFSMState.LOWCMD,
                 back_to_start=False,
                 start_from_home=False,
             )
-            tracked_traj.save_traj(f"{self.data_dir}/replay{k}.json", meta_data=self.__dict__)
+            tracked_traj.save_traj(
+                f"{self.data_dir}/replay{k}.json", meta_data=self.__dict__
+            )
 
         arm = sdk.ArmInterface(hasGripper=True)
         arm.loopOn()

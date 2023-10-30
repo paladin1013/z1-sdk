@@ -4,6 +4,6 @@ defaults:
 runner:
   data_dir: logs/teleop_replay
 
-demo_duration: 10.
-replay_duration: 20.
+teleop_duration: 5.
+replay_duration: 10.
 replay_speed: 0.5

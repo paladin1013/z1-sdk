@@ -30,28 +30,6 @@ def run_joint_movement(conf: OmegaConf):
 
 
 if __name__ == "__main__":
-    run_joint_movement()
-    # runner.record_teleop_demo()
-    # runner.sweep_params()
-    # runner.analyze_precision()
+    # run_joint_movement()
+    run_teleop_replay()
     
-    # steps = [
-    #     # ([0.5, 0.0, 0.0, 0.0, 0.0, 0.0], 5.0),
-    #     # ([0.0, 0.0, 0.0, 0.0, 0.0, 0.0], 5.0),
-    #     ([0.0, 0.0, -1.25, 0.0, 0.0, 0.0], 5.0),
-    #     ([0.0, 1.25, -1.25, 0.0, 0.0, 0.0], 5.0),
-    #     ([0.0, 0.0, -1.25, 0.0, 0.0, 0.0], 5.0),
-    #     ([0.0, 0.0, 0.0, 0.0, 0.0, 0.0], 5.0),
-    # ]
-    # runner.joint_movement_test(steps, ctrl_method=sdk.ArmFSMState.JOINTCTRL)
-    # runner.joint_movement_analysis(steps, ctrl_method=sdk.ArmFSMState.JOINTCTRL)
-    # runner.joint_movement_test(steps, ctrl_method=sdk.ArmFSMState.LOWCMD)
-    # runner.joint_movement_analysis(steps, ctrl_method=sdk.ArmFSMState.LOWCMD)
-    # runner.joint_movement_replay(steps, file_prefix="jointctrl")
-    # runner.joint_movement_analysis(steps, ctrl_method=sdk.ArmFSMState.LOWCMD, file_prefix="replay")
-    # runner.joint_movement_replay(steps, file_prefix="lowcmd_reference")
-    # runner.joint_movement_analysis(steps, ctrl_method=sdk.ArmFSMState.LOWCMD, file_prefix="replay")
-    # runner.joint_movement_id_analysis(steps, ctrl_method=sdk.ArmFSMState.LOWCMD)   
-    
-
-    # plt.show()
