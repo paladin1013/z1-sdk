@@ -193,9 +193,7 @@ dq var: {avg_dq_noise:.4f} tau var: {avg_tau_noise:.4f}"
         Three columns in each subplot: joint_q, joint_dq, joint_tau.
         """
         assert len(traj_names) == 3, "traj_names should have 3 elements"
-        reference_traj = reference_traj.interp_traj(
-            tracked_traj.np_arrays["timestamps"]
-        )
+        reference_traj = reference_traj.interp_traj(tracked_traj.timestamps)
         diff_traj = reference_traj.calc_difference(tracked_traj)
         if fig is None:
             fig = plt.figure(figsize=(24, 16))
@@ -205,8 +203,8 @@ dq var: {avg_dq_noise:.4f} tau var: {avg_tau_noise:.4f}"
             start_time = 0
         if end_time is None:
             end_time = min(
-                reference_traj.np_arrays["timestamps"][-1],
-                tracked_traj.np_arrays["timestamps"][-1],
+                reference_traj.timestamps[-1],
+                tracked_traj.timestamps[-1],
             )
         attr_names = ["joint_q", "joint_dq", "joint_tau"]
         trajs = [reference_traj, tracked_traj, diff_traj]
@@ -298,9 +296,9 @@ dq var: {avg_dq_noise:.4f} tau var: {avg_tau_noise:.4f}"
             tracked_traj.apply_moving_average(["joint_dq", "joint_tau"])
             tracked_traj.smoothen_joint_dq_start_end()
             tracked_traj.update_joint_tau()
-            # length = len(lowcmd_traj.np_arrays["timestamps"])
+            # length = len(lowcmd_traj.timestamps)
             # lowcmd_traj = Trajectory(file_name=f"{self.data_dir}/lowcmd_reference{k}.json")
-            # timestamps = tracked_traj.np_arrays["timestamps"]
+            # timestamps = tracked_traj.timestamps
             # interp_traj = lowcmd_traj.interp_traj(timestamps)
             # tracked_traj.np_arrays["joint_dq"] = interp_traj.np_arrays["joint_dq"]
             # tracked_traj.np_arrays["joint_q"] = interp_traj.np_arrays["joint_q"]

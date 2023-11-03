@@ -36,7 +36,9 @@ class PoseTracker:
     ):
         self.arm = arm
         self.input_dt = input_dt
+        """Time interval between two consecutive input commands (e.g. teleop or policy)."""
         self.record_dt = record_dt
+        """Time interval between two consecutive recorded frames."""
         self.tracked_frames: List[Frame] = []
         self.start_time = time.monotonic()
         self.arm_ctrl_dt = arm._ctrlComp.dt
@@ -327,8 +329,8 @@ class PoseTracker:
             target_timestamp = ctrl_frame_num * self.arm_ctrl_dt
 
             # Find the frame right after elapsed time
-            for k in range(traj_frame_num, trajectory.np_arrays["timestamps"].shape[0]):
-                if trajectory.np_arrays["timestamps"][k] > target_timestamp:
+            for k in range(traj_frame_num, trajectory.timestamps.shape[0]):
+                if trajectory.timestamps[k] > target_timestamp:
                     traj_frame_num = k
                     break
             else:
